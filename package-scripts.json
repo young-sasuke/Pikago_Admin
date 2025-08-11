@@ -1,0 +1,6 @@
+{
+  "scripts": {
+    "add-admin": "node scripts/add-admin.js",
+    "list-admins": "node scripts/add-admin.js list"
+  }
+}
