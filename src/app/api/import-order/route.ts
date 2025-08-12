@@ -1,114 +1,116 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-
 export const runtime = 'nodejs';
 
-// Create service role client for admin operations
-function createServiceRoleClient() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  
-  if (!supabaseUrl || !supabaseServiceKey) {
-    throw new Error('Missing Supabase configuration');
-  }
-  
-  return createClient(supabaseUrl, supabaseServiceKey);
+function sr() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  return createClient(url, key, { auth: { persistSession: false } });
 }
 
 export async function POST(req: NextRequest) {
   try {
-    // Validate shared secret
-    const sharedSecret = req.headers.get('x-shared-secret');
-    if (sharedSecret !== process.env.IMPORT_SHARED_SECRET) {
+    // verify IronXpress→Pikago call
+    const caller = req.headers.get('x-shared-secret');
+    if (!caller || caller !== process.env.IMPORT_SHARED_SECRET) {
       return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
     }
-    
-    const body = await req.json();
-    const { orderId, source } = body;
-    
-    if (!orderId) {
-      return NextResponse.json({ error: 'orderId is required' }, { status: 400 });
-    }
-    
-    console.log(`📦 Importing order ${orderId} from ${source || 'IronXpress'}...`);
-    
-    // Fetch order details from IronXpress
-    const ironxpressUrl = `${process.env.IRONXPRESS_BASE_URL}/api/admin/orders/${orderId}`;
-    console.log(`🔍 Fetching order from: ${ironxpressUrl}`);
-    
-    const orderResponse = await fetch(ironxpressUrl, {
+
+    const { orderId, source } = await req.json();
+    if (!orderId) return NextResponse.json({ error: 'orderId required' }, { status: 400 });
+
+    // fetch the order from IronXpress (with THEIR secret)
+    const ironBase = process.env.IRONXPRESS_BASE_URL!;
+    const ironSecret = process.env.PIKAGO_SHARED_SECRET!;
+    const res = await fetch(`${ironBase}/api/admin/orders/${orderId}`, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        // Add any authentication headers needed for IronXpress API
-      }
+      headers: { 'Content-Type': 'application/json', 'x-shared-secret': ironSecret },
     });
-    
-    if (!orderResponse.ok) {
-      console.error(`❌ Failed to fetch order from IronXpress: ${orderResponse.status} ${orderResponse.statusText}`);
-      return NextResponse.json({ 
-        error: 'fetch_failed',
-        details: `IronXpress API returned ${orderResponse.status}`
-      }, { status: 502 });
+    if (!res.ok) {
+      const t = await res.text();
+      console.error('IronXpress fetch failed', res.status, t);
+      return NextResponse.json({ error: 'iron_fetch_failed', details: t }, { status: 502 });
     }
-    
-    const order = await orderResponse.json();
-    console.log(`✅ Fetched order data:`, { 
-      id: order.id, 
-      total_amount: order.total_amount,
-      order_status: order.order_status 
-    });
-    
-    // Create service role client
-    const supabase = createServiceRoleClient();
-    
-    // Map order data to pikago_orders format
-    const pikagoOrderPayload = {
-      source_order_id: order.id,
-      full_name: order.full_name || order.customer_name || null,
-      email: order.email || order.customer_email || null,
-      phone: order.phone || order.customer_phone || null,
-      items: order.items || [],
-      total_amount: order.total_amount || 0,
-      payment_status: order.payment_status || 'pending',
-      order_status: 'accepted', // Always set to accepted when imported
-      pickup_date: order.pickup_date || null,
-      delivery_date: order.delivery_date || null,
-      delivery_type: order.delivery_type || null,
-      delivery_address: order.delivery_address || null,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-    
-    // Insert/upsert into pikago_orders table
-    const { data, error } = await supabase
-      .from('pikago_orders')
-      .upsert(pikagoOrderPayload, { 
-        onConflict: 'source_order_id'
-      })
-      .select()
-      .single();
-    
+
+    const o = await res.json();
+    const supabase = sr();
+
+    // upsert into the table the dashboard reads: public.orders
+   // Build payload using ONLY columns that exist in Pikago public.orders
+// and set Pikago.id = IronXpress.id (both TEXT)
+const payload = {
+  id: String(o.id),
+
+  // required not-null columns in Pikago schema
+  user_id: o.user_id,                                 // uuid
+  total_amount: o.total_amount ?? 0,                  // numeric
+  payment_method: o.payment_method ?? 'online',       // text
+  payment_status: o.payment_status ?? 'pending',      // text
+  order_status: 'accepted',                           // force accepted on import
+  pickup_date: o.pickup_date,                         // date
+  delivery_date: o.delivery_date,                     // date
+  delivery_type: o.delivery_type,                     // text
+  delivery_address: o.delivery_address,               // text
+
+  // optional / nullable fields (map if present)
+  payment_id: o.payment_id ?? null,
+  pickup_slot_id: o.pickup_slot_id ?? null,
+  delivery_slot_id: o.delivery_slot_id ?? null,
+  address_details: o.address_details ?? null,
+  applied_coupon_code: o.applied_coupon_code ?? null,
+  discount_amount: o.discount_amount ?? 0,
+  status: o.status ?? null,
+  cancelled_at: o.cancelled_at ?? null,
+  cancellation_reason: o.cancellation_reason ?? null,
+  can_be_cancelled: o.can_be_cancelled ?? true,
+  original_pickup_slot_id: o.original_pickup_slot_id ?? null,
+  original_delivery_slot_id: o.original_delivery_slot_id ?? null,
+  pickup_slot_display_time: o.pickup_slot_display_time ?? null,
+  pickup_slot_start_time: o.pickup_slot_start_time ?? null,
+  pickup_slot_end_time: o.pickup_slot_end_time ?? null,
+  delivery_slot_display_time: o.delivery_slot_display_time ?? null,
+  delivery_slot_start_time: o.delivery_slot_start_time ?? null,
+  delivery_slot_end_time: o.delivery_slot_end_time ?? null,
+
+  // provenance (these exist in Pikago schema)
+  source_order_id: null,          // leave null (uuid type in your schema)
+  source_system: 'ironxpress',
+
+  // timestamps (optional: keep IronXpress times if present)
+  created_at: o.created_at ?? new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+};
+
+// Upsert by PRIMARY KEY 'id' (TEXT)
+const { data, error } = await supabase
+  .from('orders')
+  .upsert(payload, { onConflict: 'id' })
+  .select()
+  .single();
+
+
     if (error) {
-      console.error(`❌ Failed to insert order into Pikago database:`, error);
-      return NextResponse.json({ 
-        error: error.message 
-      }, { status: 500 });
+      console.error('Upsert failed', error);
+      return NextResponse.json({ error: 'db_upsert_failed', details: error.message }, { status: 500 });
     }
-    
-    console.log(`✅ Successfully imported order ${orderId} as Pikago order ${data.id}`);
-    
-    return NextResponse.json({ 
-      ok: true, 
-      pikagoOrderId: data.id,
-      sourceOrderId: orderId
+
+    // optional notification
+    await supabase.from('notifications').insert({
+      recipient_type: 'admin',
+      notification_type: 'order_imported',
+      title: 'New Accepted Order',
+      message: `Order ${o.id} imported from ${source || 'IronXpress'}`,
+      priority: 'high',
+      is_read: false,
+      is_sent: true,
+      related_order_id: o.id,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     });
-    
-  } catch (error) {
-    console.error('❌ Error in import-order endpoint:', error);
-    return NextResponse.json({ 
-      error: 'internal_server_error',
-      details: error instanceof Error ? error.message : 'Unknown error'
-    }, { status: 500 });
+
+    return NextResponse.json({ ok: true, pikagoOrderId: data.id, sourceOrderId: orderId });
+  } catch (e: any) {
+    console.error('import-order error', e?.message || e);
+    return NextResponse.json({ error: 'internal_server_error', details: e?.message || 'unknown' }, { status: 500 });
   }
 }

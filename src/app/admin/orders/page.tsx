@@ -1,4 +1,9 @@
 'use client'
+import { ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
+
+// Somewhere near the end of the body:
+<ToastContainer position="top-right" autoClose={3000} newestOnTop />
 
 import { useState, useEffect } from 'react'
 import { AdminLayout } from '@/components/layout/AdminLayout'
@@ -73,24 +78,56 @@ function useOrdersDirect() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetchOrders()
+  fetchOrders();
 
-    // Realtime: refetch on ANY change to orders
-    const channel = supabase
-      .channel('orders-any')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'orders' },
-        () => fetchOrders()
-      )
-      .subscribe()
+  const channel = supabase
+    .channel('orders-any')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'orders' },
+      (payload: any) => {
+        // 1) New order inserted
+        if (payload.eventType === 'INSERT') {
+          const o = payload.new || {};
+          const shortId =
+            (o.id && String(o.id).slice(0, 8)) || (o.source_order_id && String(o.source_order_id).slice(0, 8)) || '—';
+          const name = o.full_name || o.customer_name || 'New customer';
+          const status = (o.order_status || '').toLowerCase();
 
-    // IMPORTANT: do not return a Promise from cleanup
-    return () => {
-      void channel.unsubscribe()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+          // Only cheer for accepted/confirmed (your importer inserts as 'accepted')
+          if (status === 'accepted' || status === 'confirmed') {
+            toast.success(`🆕 New ${status} order ${shortId} from ${name}`);
+          } else {
+            // Fallback (kept subtle)
+            toast.info(`New order ${shortId} received`);
+          }
+        }
+
+        // 2) Order status changed → accepted/confirmed
+        if (payload.eventType === 'UPDATE') {
+          const prev = (payload.old?.order_status || '').toLowerCase();
+          const next = (payload.new?.order_status || '').toLowerCase();
+          if (prev !== next && (next === 'accepted' || next === 'confirmed')) {
+            const shortId =
+              (payload.new?.id && String(payload.new.id).slice(0, 8)) ||
+              (payload.new?.source_order_id && String(payload.new.source_order_id).slice(0, 8)) ||
+              '—';
+            toast.success(`✅ Order ${shortId} is ${next}`);
+          }
+        }
+
+        // Always refresh the table
+        fetchOrders();
+      }
+    )
+    .subscribe();
+
+  return () => {
+    void channel.unsubscribe();
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
 
   async function fetchOrders() {
     try {
