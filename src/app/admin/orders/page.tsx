@@ -1,9 +1,6 @@
 'use client'
-import { ToastContainer } from 'react-toastify';
-import 'react-toastify/dist/ReactToastify.css';
-
-// Somewhere near the end of the body:
-<ToastContainer position="top-right" autoClose={3000} newestOnTop />
+import { ToastContainer } from 'react-toastify'
+import 'react-toastify/dist/ReactToastify.css'
 
 import { useState, useEffect } from 'react'
 import { AdminLayout } from '@/components/layout/AdminLayout'
@@ -31,12 +28,21 @@ import {
   CheckCircle,
 } from 'lucide-react'
 
-/** For UX: “Accepted” in Pikago means accepted OR confirmed */
+/** “Accepted” tab shows accepted + confirmed */
 const ACCEPTED_ALIASES = ['accepted', 'confirmed'] as const
 
 /* ------------------------------------------------------------------ */
 /* Types                                                              */
 /* ------------------------------------------------------------------ */
+type UserRow = {
+  id: string // users.id
+  full_name: string
+  phone: string | null
+  email: string | null
+  is_available: boolean
+  is_active: boolean
+}
+
 interface OrderItem {
   name?: string
   quantity?: number
@@ -62,14 +68,6 @@ interface PikagoOrder {
   updated_at: string
 }
 
-interface Rider {
-  id: string
-  full_name: string
-  phone: string | null
-  is_active: boolean
-  created_at: string
-}
-
 /* --------------------------------------------- */
 /* Hook: fetch ALL orders (filter client-side)   */
 /* --------------------------------------------- */
@@ -78,56 +76,56 @@ function useOrdersDirect() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-  fetchOrders();
+    fetchOrders()
 
-  const channel = supabase
-    .channel('orders-any')
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'orders' },
-      (payload: any) => {
-        // 1) New order inserted
-        if (payload.eventType === 'INSERT') {
-          const o = payload.new || {};
-          const shortId =
-            (o.id && String(o.id).slice(0, 8)) || (o.source_order_id && String(o.source_order_id).slice(0, 8)) || '—';
-          const name = o.full_name || o.customer_name || 'New customer';
-          const status = (o.order_status || '').toLowerCase();
-
-          // Only cheer for accepted/confirmed (your importer inserts as 'accepted')
-          if (status === 'accepted' || status === 'confirmed') {
-            toast.success(`🆕 New ${status} order ${shortId} from ${name}`);
-          } else {
-            // Fallback (kept subtle)
-            toast.info(`New order ${shortId} received`);
-          }
-        }
-
-        // 2) Order status changed → accepted/confirmed
-        if (payload.eventType === 'UPDATE') {
-          const prev = (payload.old?.order_status || '').toLowerCase();
-          const next = (payload.new?.order_status || '').toLowerCase();
-          if (prev !== next && (next === 'accepted' || next === 'confirmed')) {
+    const channel = supabase
+      .channel('orders-any')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'orders' },
+        (payload: any) => {
+          // 1) New order inserted
+          if (payload.eventType === 'INSERT') {
+            const o = payload.new || {}
             const shortId =
-              (payload.new?.id && String(payload.new.id).slice(0, 8)) ||
-              (payload.new?.source_order_id && String(payload.new.source_order_id).slice(0, 8)) ||
-              '—';
-            toast.success(`✅ Order ${shortId} is ${next}`);
+              (o.id && String(o.id).slice(0, 8)) ||
+              (o.source_order_id && String(o.source_order_id).slice(0, 8)) ||
+              '—'
+            const name = o.full_name || o.customer_name || 'New customer'
+            const status = (o.order_status || '').toLowerCase()
+
+            if (status === 'accepted' || status === 'confirmed') {
+              toast.success(`🆕 New ${status} order ${shortId} from ${name}`)
+            } else {
+              toast.info(`New order ${shortId} received`)
+            }
           }
+
+          // 2) Order status changed → accepted/confirmed
+          if (payload.eventType === 'UPDATE') {
+            const prev = (payload.old?.order_status || '').toLowerCase()
+            const next = (payload.new?.order_status || '').toLowerCase()
+            if (prev !== next && (next === 'accepted' || next === 'confirmed')) {
+              const shortId =
+                (payload.new?.id && String(payload.new.id).slice(0, 8)) ||
+                (payload.new?.source_order_id &&
+                  String(payload.new.source_order_id).slice(0, 8)) ||
+                '—'
+              toast.success(`✅ Order ${shortId} is ${next}`)
+            }
+          }
+
+          // Always refresh the table
+          fetchOrders()
         }
+      )
+      .subscribe()
 
-        // Always refresh the table
-        fetchOrders();
-      }
-    )
-    .subscribe();
-
-  return () => {
-    void channel.unsubscribe();
-  };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, []);
-
+    return () => {
+      void channel.unsubscribe()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   async function fetchOrders() {
     try {
@@ -175,47 +173,40 @@ function useOrdersDirect() {
 }
 
 /* ------------------------------ */
-/* Hook: fetch active riders list */
+/* Hook: fetch available users    */
+/* from public.users (enrich via delivery_partners if present) */
 /* ------------------------------ */
-function useRiders() {
-  const [riders, setRiders] = useState<Rider[]>([])
+/* ------------------------------ */
+/* Hook: fetch assignable users   */
+/* via server API (service role)  */
+/* ------------------------------ */
+function useUsers() {
+  const [rows, setRows] = useState<UserRow[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetchRiders()
+    void fetchUsers()
   }, [])
 
-  async function fetchRiders() {
+  async function fetchUsers() {
     try {
-      const { data, error } = await supabase
-        .from('riders')
-        .select('*')
-        .eq('is_active', true)
-        .order('full_name', { ascending: true })
-
-      if (error) {
-        console.error('Error fetching riders:', error)
-        return
-      }
-
-      setRiders(
-        (data ?? []).map((r: any) => ({
-          id: String(r.id),
-          full_name: r.full_name ?? 'Unnamed',
-          phone: r.phone ?? null,
-          is_active: !!r.is_active,
-          created_at: r.created_at ?? new Date().toISOString(),
-        }))
-      )
-    } catch (error) {
-      console.error('Error fetching riders:', error)
+      const resp = await fetch('/api/admin/users', { cache: 'no-store' })
+      const json = await resp.json()
+      if (!resp.ok || !json.ok) throw new Error(json.error || 'Failed to fetch users')
+      setRows(json.data as UserRow[])
+    } catch (e: any) {
+      console.error('Error fetching users:', e)
+      toast.error('Failed to fetch users')
+      setRows([])
     } finally {
       setLoading(false)
     }
   }
 
-  return { riders, loading }
+  // keep return name 'riders' so the modal props don’t change
+  return { riders: rows, loading }
 }
+
 
 /* ------------------ */
 /* Assign Rider Modal */
@@ -229,7 +220,7 @@ function AssignRiderModal({
   isOpen: boolean
   onClose: () => void
   order: PikagoOrder | null
-  riders: Rider[]
+  riders: UserRow[]
 }) {
   const [selectedRiderId, setSelectedRiderId] = useState('')
   const [isAssigning, setIsAssigning] = useState(false)
@@ -242,7 +233,7 @@ function AssignRiderModal({
       const response = await fetch('/api/assign', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orderId: order.id, riderId: selectedRiderId }),
+        body: JSON.stringify({ orderId: order.id, userId: selectedRiderId }),
       })
 
       const result = await response.json()
@@ -261,7 +252,8 @@ function AssignRiderModal({
     }
   }
 
-  const availableRiders = riders.filter((r) => r.is_active)
+  // Show users that are active & available (defaults true if no delivery_partners row)
+  const available = riders.filter((r) => r.is_active !== false && r.is_available !== false)
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Assign Rider" size="lg">
@@ -294,33 +286,33 @@ function AssignRiderModal({
             </div>
           </div>
 
-          {/* Riders */}
+          {/* Riders (Users) */}
           <div>
             <h4 className="font-medium text-gray-900 mb-3">
-              Available Riders ({availableRiders.length})
+              Available Riders ({available.length})
             </h4>
-            {availableRiders.length === 0 ? (
+            {available.length === 0 ? (
               <div className="text-center py-8 text-gray-500">
                 <Truck className="h-8 w-8 mx-auto mb-2 opacity-50" />
                 <p>No riders available</p>
               </div>
             ) : (
               <div className="space-y-2 max-h-60 overflow-y-auto">
-                {availableRiders.map((rider) => (
+                {available.map((r) => (
                   <label
-                    key={rider.id}
+                    key={r.id}
                     className={`flex items-center p-3 border rounded-lg cursor-pointer transition-colors ${
-                      selectedRiderId === rider.id
+                      selectedRiderId === r.id
                         ? 'border-blue-500 bg-blue-50'
                         : 'border-gray-200 hover:bg-gray-50'
                     }`}
                   >
                     <input
-                      id={`rider-${rider.id}`}
+                      id={`rider-${r.id}`}
                       name="rider"
                       type="radio"
-                      value={rider.id}
-                      checked={selectedRiderId === rider.id}
+                      value={r.id}
+                      checked={selectedRiderId === r.id}
                       onChange={(e) => setSelectedRiderId(e.target.value)}
                       className="sr-only"
                     />
@@ -330,9 +322,9 @@ function AssignRiderModal({
                           <Truck className="h-5 w-5 text-blue-600" />
                         </div>
                         <div>
-                          <p className="font-medium text-gray-900">{rider.full_name}</p>
+                          <p className="font-medium text-gray-900">{r.full_name}</p>
                           <p className="text-xs text-gray-400">
-                            {rider.phone || 'No phone'}
+                            {r.phone || r.email || 'No contact'}
                           </p>
                         </div>
                       </div>
@@ -353,7 +345,7 @@ function AssignRiderModal({
             </Button>
             <Button
               onClick={handleAssign}
-              disabled={!selectedRiderId || availableRiders.length === 0}
+              disabled={!selectedRiderId || available.length === 0}
               isLoading={isAssigning}
             >
               Assign Rider
@@ -529,7 +521,7 @@ function OrderDetailsModal({
 /* ----------------- */
 export default function OrdersPage() {
   const { orders, loading } = useOrdersDirect()
-  const { riders } = useRiders()
+  const { riders } = useUsers() // <-- now reading from users table
 
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('accepted') // default view
@@ -542,9 +534,7 @@ export default function OrdersPage() {
 
   async function refreshCounts() {
     try {
-      const { data, error } = await supabase
-        .from('orders')
-        .select('order_status')
+      const { data, error } = await supabase.from('orders').select('order_status')
       if (error) return
 
       const next: Record<string, number> = {}
@@ -859,6 +849,9 @@ export default function OrdersPage() {
         }}
         order={selectedOrder}
       />
+
+      {/* Toasts */}
+      <ToastContainer position="top-right" autoClose={3000} newestOnTop />
     </AdminLayout>
   )
 }

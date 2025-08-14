@@ -1,134 +1,162 @@
 'use client'
 
 import { useEffect, useState, useRef } from 'react'
-import { supabase, Order, OrderAssignment, Rider, Notification, DashboardStats } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase'
 import { toast } from 'react-toastify'
-import { RealtimeChannel } from '@supabase/supabase-js'
+import type { RealtimeChannel } from '@supabase/supabase-js'
+
+/* ---------- Local types (kept minimal on purpose) ---------- */
+type DBOrder = {
+  id: string
+  order_status: string
+  created_at: string
+  total_amount?: number | string | null
+}
+
+type DBAssignedOrder = {
+  id: string
+  order_id: string
+  status?: string | null
+  created_at?: string | null
+}
+
+export type UIRider = {
+  id: string           // users.id
+  full_name: string
+  phone: string | null
+  is_active: boolean
+  created_at: string
+  // you can add optional fields later if your UI needs them
+}
+
+export type UIDashboardStats = {
+  total_orders: number
+  pending_orders: number
+  assigned_orders: number
+  in_transit_orders: number
+  delivered_orders: number
+  active_riders: number
+  available_riders: number
+  unread_notifications: number
+  today_revenue: string
+  today_orders: number
+}
+
+/* Supabase realtime payload shape (simplified) */
+type PgPayload<T = any> = {
+  eventType: 'INSERT' | 'UPDATE' | 'DELETE'
+  new: T
+  old?: T
+}
 
 export function useRealtime() {
   const channelsRef = useRef<RealtimeChannel[]>([])
 
-  // fix: Replace any with proper payload type
-  const subscribeToOrders = (callback: (payload: { eventType: string; new: any; old?: any }) => void) => {
+  /* ORDERS realtime */
+  const subscribeToOrders = (callback: (payload: PgPayload<DBOrder>) => void) => {
     const channel = supabase
       .channel('orders-channel')
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'orders'
-      }, (payload) => {
-        console.log('Orders change:', payload)
-        
-        // Show toast notifications for new orders
-        if (payload.eventType === 'INSERT') {
-          toast.success(`🆕 New order received: ${payload.new.id}`)
-        } else if (payload.eventType === 'UPDATE' && payload.old?.order_status !== payload.new?.order_status) {
-          toast.info(`📋 Order ${payload.new.id} status: ${payload.new.order_status}`)
-        }
-        
-        callback(payload)
-      })
-      .subscribe()
-
-    channelsRef.current.push(channel)
-    return channel
-  }
-
-  const subscribeToAssignments = (callback: (payload: { eventType: string; new: any; old?: any }) => void) => {
-    const channel = supabase
-      .channel('assignments-channel')
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'order_assignments'
-      }, (payload) => {
-        console.log('Assignment change:', payload)
-        
-        // Show toast notifications for assignment changes
-        if (payload.eventType === 'INSERT') {
-          toast.success(`👤 Order ${payload.new.order_id} assigned to rider`)
-        } else if (payload.eventType === 'UPDATE' && payload.old?.assignment_status !== payload.new?.assignment_status) {
-          const statusEmojis: Record<string, string> = {
-            'accepted': '✅',
-            'picked_up': '📦',
-            'in_transit': '🚚',
-            'delivered': '✨',
-            'cancelled': '❌',
-            'failed': '⚠️'
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'orders' },
+        (payload: any) => {
+          if (payload.eventType === 'INSERT') {
+            toast.success(`🆕 New order received: ${payload.new?.id ?? '—'}`)
+          } else if (
+            payload.eventType === 'UPDATE' &&
+            payload.old?.order_status !== payload.new?.order_status
+          ) {
+            toast.info(`📋 Order ${payload.new?.id ?? '—'} status: ${payload.new.order_status}`)
           }
-          const emoji = statusEmojis[payload.new.assignment_status] || '📋'
-          toast.info(`${emoji} Assignment ${payload.new.order_id}: ${payload.new.assignment_status}`)
+          callback(payload)
         }
-        
-        callback(payload)
-      })
+      )
       .subscribe()
 
     channelsRef.current.push(channel)
     return channel
   }
 
-  const subscribeToRiders = (callback: (payload: { eventType: string; new: any; old?: any }) => void) => {
+  /* ASSIGNMENTS realtime (assigned_orders) */
+  const subscribeToAssignments = (callback: (payload: PgPayload<DBAssignedOrder>) => void) => {
     const channel = supabase
-      .channel('riders-channel')
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'riders'
-      }, (payload) => {
-        console.log('Rider change:', payload)
-        
-        // Show toast notifications for rider changes
-        if (payload.eventType === 'INSERT') {
-          toast.success(`🏍️ New rider added: ${payload.new.full_name}`)
-        } else if (payload.eventType === 'UPDATE' && payload.old?.is_available !== payload.new?.is_available) {
-          const status = payload.new.is_available ? 'available' : 'unavailable'
-          toast.info(`👤 ${payload.new.full_name} is now ${status}`)
+      .channel('assigned-orders-channel')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'assigned_orders' },
+        (payload: any) => {
+          if (payload.eventType === 'INSERT') {
+            toast.success(`👤 Order ${payload.new?.order_id ?? '—'} assigned`)
+          } else if (payload.eventType === 'UPDATE' && payload.old?.status !== payload.new?.status) {
+            const m = payload.new?.status ?? 'updated'
+            const emojiMap: Record<string, string> = {
+              assigned: '✅',
+              picked_up: '📦',
+              in_transit: '🚚',
+              delivered: '✨',
+              completed: '🏁',
+              cancelled: '❌',
+              failed: '⚠️',
+            }
+            toast.info(`${emojiMap[m] || '📋'} Assignment ${payload.new?.order_id ?? '—'}: ${m}`)
+          }
+          callback(payload)
         }
-        
-        callback(payload)
-      })
+      )
       .subscribe()
 
     channelsRef.current.push(channel)
     return channel
   }
 
-  const subscribeToNotifications = (callback: (payload: { eventType: string; new: any; old?: any }) => void) => {
+  /* RIDERS realtime (delivery_partners) */
+  const subscribeToRiders = (callback: (payload: PgPayload<any>) => void) => {
+    const channel = supabase
+      .channel('delivery-partners-channel')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'delivery_partners' },
+        (payload: any) => {
+          if (payload.eventType === 'INSERT') {
+            const name = [payload.new?.first_name, payload.new?.last_name].filter(Boolean).join(' ') || 'New rider'
+            toast.success(`🏍️ New rider added: ${name}`)
+          } else if (
+            payload.eventType === 'UPDATE' &&
+            payload.old?.is_available !== payload.new?.is_available
+          ) {
+            const name = [payload.new?.first_name, payload.new?.last_name].filter(Boolean).join(' ') || 'Rider'
+            const status = payload.new?.is_available ? 'available' : 'unavailable'
+            toast.info(`👤 ${name} is now ${status}`)
+          }
+          callback(payload)
+        }
+      )
+      .subscribe()
+
+    channelsRef.current.push(channel)
+    return channel
+  }
+
+  /* NOTIFICATIONS realtime (optional; uses recipient='admin') */
+  const subscribeToNotifications = (callback: (payload: PgPayload<any>) => void) => {
     const channel = supabase
       .channel('notifications-channel')
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'notifications',
-        filter: 'recipient_type=eq.admin'
-      }, (payload) => {
-        console.log('New notification:', payload)
-        
-        const notification = payload.new as Notification
-        
-        // Show toast based on priority
-        const toastOptions = {
-          autoClose: notification.priority === 'urgent' ? false : 5000,
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: 'recipient=eq.admin', // adjust if your column differs
+        },
+        (payload: any) => {
+          const n = payload.new || {}
+          const title = n.title ?? 'Notification'
+          const body = n.body ?? ''
+          toast.info(`💬 ${title}${body ? `: ${body}` : ''}`)
+          callback(payload)
         }
-        
-        switch (notification.priority) {
-          case 'urgent':
-            toast.error(`🚨 ${notification.title}: ${notification.message}`, toastOptions)
-            break
-          case 'high':
-            toast.warn(`⚠️ ${notification.title}: ${notification.message}`, toastOptions)
-            break
-          case 'medium':
-            toast.info(`📋 ${notification.title}: ${notification.message}`, toastOptions)
-            break
-          default:
-            toast.info(`💬 ${notification.title}: ${notification.message}`, toastOptions)
-            break
-        }
-        
-        callback(payload)
-      })
+      )
       .subscribe()
 
     channelsRef.current.push(channel)
@@ -136,16 +164,14 @@ export function useRealtime() {
   }
 
   const cleanup = () => {
-    channelsRef.current.forEach(channel => {
+    channelsRef.current.forEach((channel) => {
       supabase.removeChannel(channel)
     })
     channelsRef.current = []
   }
 
   useEffect(() => {
-    return () => {
-      cleanup()
-    }
+    return () => cleanup()
   }, [])
 
   return {
@@ -157,64 +183,58 @@ export function useRealtime() {
   }
 }
 
-// Hook for fetching and auto-updating dashboard stats
+/* ===========================
+   Dashboard Stats (live)
+   =========================== */
 export function useDashboardStats() {
-  const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [stats, setStats] = useState<UIDashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
-  const { subscribeToOrders, subscribeToAssignments } = useRealtime()
+  const { subscribeToOrders, subscribeToAssignments, subscribeToRiders } = useRealtime()
 
   const fetchStats = async () => {
     try {
-      // fix: Check if Supabase client is properly configured
-      if (!supabase) {
-        console.error('Supabase client is not configured')
-        setLoading(false)
-        return
-      }
-
-      // fix: Calculate stats from orders table, include created_at for today_orders
-      const { data: orders, error } = await supabase
+      // Orders for counts + today metrics
+      const { data: orders } = await supabase
         .from('orders')
-        .select('order_status, created_at')
+        .select('order_status, created_at, total_amount')
 
-      if (error) {
-        console.error('Error fetching orders for stats:', error)
-        // fix: Use correct DashboardStats interface properties
-        setStats({
-          total_orders: 0,
-          pending_orders: 0,
-          assigned_orders: 0,
-          in_transit_orders: 0,
-          delivered_orders: 0,
-          active_riders: 0,
-          available_riders: 0,
-          unread_notifications: 0,
-          today_revenue: '0',
-          today_orders: 0
-        })
-        return
-      }
+      // Riders (delivery_partners) for active/available counts
+      const { data: partners } = await supabase
+        .from('delivery_partners')
+        .select('is_active, is_available')
 
-      // fix: Calculate stats from orders to match DashboardStats interface
-      const statsFromOrders = {
-        total_orders: orders?.length || 0,
-        pending_orders: orders?.filter(o => o.order_status === 'pending' || o.order_status === 'confirmed').length || 0,
-        assigned_orders: orders?.filter(o => o.order_status === 'accepted').length || 0,
-        in_transit_orders: orders?.filter(o => o.order_status === 'in_transit').length || 0,
-        delivered_orders: orders?.filter(o => o.order_status === 'delivered').length || 0,
-        active_riders: 0, // No riders table
-        available_riders: 0,
-        unread_notifications: 0, // No notifications count
-        today_revenue: '0', // No revenue calculation
-        today_orders: orders?.filter(o => {
-          const today = new Date().toISOString().split('T')[0]
-          return o.created_at.startsWith(today)
-        }).length || 0
-      }
+      const o = orders ?? []
+      const today = new Date().toISOString().split('T')[0]
 
-      setStats(statsFromOrders)
-    } catch (error) {
-      console.error('Error fetching dashboard stats:', error)
+      const total_orders = o.length
+      const pending_orders = o.filter((x: any) => x.order_status === 'pending' || x.order_status === 'confirmed').length
+      const assigned_orders = o.filter((x: any) => x.order_status === 'assigned').length
+      const in_transit_orders = o.filter((x: any) => x.order_status === 'in_transit').length
+      const delivered_orders = o.filter((x: any) => x.order_status === 'delivered' || x.order_status === 'completed').length
+      const today_orders = o.filter((x: any) => String(x.created_at).startsWith(today)).length
+      const today_revenue = o
+        .filter((x: any) => String(x.created_at).startsWith(today))
+        .reduce((sum: number, x: any) => sum + Number(x.total_amount ?? 0), 0)
+        .toFixed(0)
+
+      const p = partners ?? []
+      const active_riders = p.filter((r: any) => r.is_active === true).length
+      const available_riders = p.filter((r: any) => r.is_available === true).length
+
+      setStats({
+        total_orders,
+        pending_orders,
+        assigned_orders,
+        in_transit_orders,
+        delivered_orders,
+        active_riders,
+        available_riders,
+        unread_notifications: 0, // wire this up later if you add a 'read' flag
+        today_revenue,
+        today_orders,
+      })
+    } catch (e) {
+      console.error('Dashboard stats error:', e)
     } finally {
       setLoading(false)
     }
@@ -222,53 +242,35 @@ export function useDashboardStats() {
 
   useEffect(() => {
     fetchStats()
-
-    // Subscribe to changes that affect stats
-    const ordersChannel = subscribeToOrders(() => {
-      fetchStats()
-    })
-
-    const assignmentsChannel = subscribeToAssignments(() => {
-      fetchStats()
-    })
-
+    const chOrders = subscribeToOrders(() => fetchStats())
+    const chAssigned = subscribeToAssignments(() => fetchStats())
+    const chRiders = subscribeToRiders(() => fetchStats())
     return () => {
-      supabase.removeChannel(ordersChannel)
-      supabase.removeChannel(assignmentsChannel)
+      supabase.removeChannel(chOrders)
+      supabase.removeChannel(chAssigned)
+      supabase.removeChannel(chRiders)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return { stats, loading, refetch: fetchStats }
 }
 
-// Hook for fetching and auto-updating orders
+/* ===========================
+   Orders (live)
+   =========================== */
 export function useOrders() {
-  const [orders, setOrders] = useState<Order[]>([])
+  const [orders, setOrders] = useState<DBOrder[]>([])
   const [loading, setLoading] = useState(true)
   const { subscribeToOrders } = useRealtime()
 
   const fetchOrders = async () => {
     try {
-      // fix: Check if Supabase client is properly configured
-      if (!supabase) {
-        console.error('Supabase client is not configured')
-        setLoading(false)
-        return
-      }
-
-      const { data, error } = await supabase
-        .from('orders')
-        .select('*')
-        .order('created_at', { ascending: false })
-
-      if (error) {
-        console.error('Error fetching orders:', error)
-        return
-      }
-
-      setOrders(data || [])
-    } catch (error) {
-      console.error('Error fetching orders:', error)
+      const { data, error } = await supabase.from('orders').select('*').order('created_at', { ascending: false })
+      if (error) return
+      setOrders((data as DBOrder[]) || [])
+    } catch (e) {
+      console.error('Error fetching orders:', e)
     } finally {
       setLoading(false)
     }
@@ -276,43 +278,38 @@ export function useOrders() {
 
   useEffect(() => {
     fetchOrders()
-
-    // Subscribe to realtime changes
     const channel = subscribeToOrders((payload) => {
       if (payload.eventType === 'INSERT') {
-        setOrders(prev => [payload.new, ...prev])
+        setOrders((prev) => [payload.new as DBOrder, ...prev])
       } else if (payload.eventType === 'UPDATE') {
-        setOrders(prev => 
-          prev.map(order => 
-            order.id === payload.new.id ? payload.new : order
-          )
-        )
+        setOrders((prev) => prev.map((o) => (o.id === payload.new.id ? (payload.new as DBOrder) : o)))
       } else if (payload.eventType === 'DELETE') {
-        setOrders(prev => prev.filter(order => order.id !== payload.old.id))
+        setOrders((prev) => prev.filter((o) => o.id !== payload.old?.id))
       }
     })
-
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [])
+  }, []) // eslint-disable-line
 
   return { orders, loading, refetch: fetchOrders }
 }
 
-// Hook for fetching and auto-updating assignments
+/* ===========================
+   Assignments (live)
+   =========================== */
 export function useAssignments() {
-  const [assignments, setAssignments] = useState<OrderAssignment[]>([])
+  const [assignments, setAssignments] = useState<DBAssignedOrder[]>([])
   const [loading, setLoading] = useState(true)
   const { subscribeToAssignments } = useRealtime()
 
   const fetchAssignments = async () => {
     try {
-      // Since order_assignments table doesn't exist, return empty array
-      console.warn('order_assignments table does not exist, returning empty assignments')
-      setAssignments([])
-    } catch (error) {
-      console.error('Error fetching assignments:', error)
+      const { data, error } = await supabase.from('assigned_orders').select('*').order('created_at', { ascending: false })
+      if (error) return
+      setAssignments((data as DBAssignedOrder[]) || [])
+    } catch (e) {
+      console.error('Error fetching assigned_orders:', e)
     } finally {
       setLoading(false)
     }
@@ -320,34 +317,52 @@ export function useAssignments() {
 
   useEffect(() => {
     fetchAssignments()
-
-    // Subscribe to realtime changes
-    const channel = subscribeToAssignments((payload) => {
-      // Refetch when assignments change to get joined data
-      fetchAssignments()
-    })
-
+    const channel = subscribeToAssignments(() => fetchAssignments())
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [])
+  }, []) // eslint-disable-line
 
   return { assignments, loading, refetch: fetchAssignments }
 }
 
-// Hook for fetching and auto-updating riders
+/* ===========================
+   Riders (live) -> delivery_partners + users
+   =========================== */
 export function useRiders() {
-  const [riders, setRiders] = useState<Rider[]>([])
+  const [riders, setRiders] = useState<UIRider[]>([])
   const [loading, setLoading] = useState(true)
   const { subscribeToRiders } = useRealtime()
 
   const fetchRiders = async () => {
     try {
-      // Since riders table doesn't exist, return empty array
-      console.warn('riders table does not exist, returning empty riders')
-      setRiders([])
-    } catch (error) {
-      console.error('Error fetching riders:', error)
+      // Join delivery_partners -> users for phone/email; this can be empty on client if RLS blocks users.
+      const { data, error } = await supabase
+        .from('delivery_partners')
+        .select(`
+          user_id,
+          first_name,
+          last_name,
+          is_active,
+          created_at,
+          users:users!inner(id, phone)
+        `)
+        .eq('is_active', true)
+        .order('first_name', { ascending: true })
+
+      if (error) return
+
+      const mapped: UIRider[] = (data ?? []).map((r: any) => ({
+        id: String(r.users?.id ?? r.user_id),
+        full_name: [r.first_name, r.last_name].filter(Boolean).join(' ').trim() || 'Unnamed',
+        phone: r.users?.phone ?? null,
+        is_active: !!r.is_active,
+        created_at: r.created_at ?? new Date().toISOString(),
+      }))
+
+      setRiders(mapped)
+    } catch (e) {
+      console.error('Error fetching riders:', e)
     } finally {
       setLoading(false)
     }
@@ -355,26 +370,11 @@ export function useRiders() {
 
   useEffect(() => {
     fetchRiders()
-
-    // Subscribe to realtime changes
-    const channel = subscribeToRiders((payload) => {
-      if (payload.eventType === 'INSERT') {
-        setRiders(prev => [payload.new, ...prev])
-      } else if (payload.eventType === 'UPDATE') {
-        setRiders(prev => 
-          prev.map(rider => 
-            rider.id === payload.new.id ? payload.new : rider
-          )
-        )
-      } else if (payload.eventType === 'DELETE') {
-        setRiders(prev => prev.filter(rider => rider.id !== payload.old.id))
-      }
-    })
-
+    const channel = subscribeToRiders(() => fetchRiders())
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [])
+  }, []) // eslint-disable-line
 
   return { riders, loading, refetch: fetchRiders }
 }
