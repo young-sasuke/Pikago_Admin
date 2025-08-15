@@ -1,6 +1,7 @@
 // app/api/assign/route.ts  (Pikago)
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { createClient } from '@supabase/supabase-js'
 
 export const runtime = 'nodejs'
 
@@ -10,6 +11,14 @@ const IRON_TOKEN =
   process.env.IRONXPRESS_SHARED_SECRET ??
   process.env.IMPORT_SHARED_SECRET ??
   ''
+
+// IronXpress Database connection for direct updates
+const IRONXPRESS_URL = 'https://qehtgclgjhzdlqcjujpp.supabase.co'
+const IRONXPRESS_SERVICE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFlaHRnY2xnamh6ZGxxY2p1anBwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1MDg0OTY3NiwiZXhwIjoyMDY2NDI1Njc2fQ.6wlzcNTxYbpWcP_Kbi6PNiFU7WgfQ66hDf3Zx8mvur0'
+
+const ironxpressAdmin = createClient(IRONXPRESS_URL, IRONXPRESS_SERVICE_KEY, {
+  auth: { persistSession: false }
+})
 
 export async function POST(req: NextRequest) {
   try {
@@ -95,8 +104,8 @@ async function importFromIronXpress(id: string) {
     const url = `${IRON_BASE.replace(/\/+$/, '')}/api/admin/orders/${encodeURIComponent(id)}`
     const res = await fetch(url, {
       headers: {
-        Authorization: `Bearer ${IRON_TOKEN}`,
-        Accept: 'application/json',
+        'x-shared-secret': IRON_TOKEN, // Use x-shared-secret for fetching individual orders
+        'Accept': 'application/json',
       },
       cache: 'no-store',
     })
@@ -155,26 +164,43 @@ async function importFromIronXpress(id: string) {
 }
 
 async function notifyIronXpressAssigned(orderId: string, riderUserId: string) {
-  const url = `${IRON_BASE.replace(/\/+$/, '')}/api/admin/orders`
+  console.log(`[assign] 🎯 Directly updating IronXpress database for order: ${orderId}`)
+  console.log(`[assign] Setting order status to 'assigned' (rider: ${riderUserId})`)
+  
   try {
-    const res = await fetch(url, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${IRON_TOKEN}`, // 👈 REQUIRED by IronXpress
-        Accept: 'application/json',
-      },
-      body: JSON.stringify({
-        id: orderId,
+    // Direct database update to IronXpress orders table
+    const { data, error } = await ironxpressAdmin
+      .from('orders')
+      .update({ 
         order_status: 'assigned',
-        assigned_user_id: riderUserId, // safe even if IX ignores it
-      }),
-    })
-    if (!res.ok) {
-      console.warn('[assign] IronXpress PATCH failed:', res.status, await res.text())
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', orderId)
+      .select('id, order_status, user_id')
+      .maybeSingle()
+    
+    if (error) {
+      console.error('[assign] ❌ IronXpress DB update failed:', error)
+      return false
     }
+    
+    if (!data) {
+      console.error(`[assign] ❌ Order ${orderId} not found in IronXpress database`)
+      return false
+    }
+    
+    console.log('[assign] ✅ Successfully updated IronXpress database:', data)
+    console.log('[assign] 🔔 Database triggers will now fire for notifications')
+    
+    // The database trigger 'trigger_send_notification_on_order_status_change' will automatically 
+    // fire and call send_order_status_notification() function which will create a notification
+    // for the customer that their order has been assigned to a rider
+    
+    return true
+    
   } catch (e) {
-    console.warn('[assign] IronXpress PATCH exception:', e)
+    console.error('[assign] ❌ IronXpress DB update exception:', e)
+    return false
   }
 }
 

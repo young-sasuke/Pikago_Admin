@@ -12,28 +12,49 @@ const IRON_TOKEN =
   IMPORT_SECRET
 
 export async function POST(req: NextRequest) {
+  console.log('[import-order] 📥 Received import request from IronXpress')
   try {
+    // Log headers for debugging
+    const headers = Object.fromEntries(req.headers.entries())
+    console.log('[import-order] Headers:', JSON.stringify(headers, null, 2))
+    
     // Shared-secret check (IronXpress -> Pikago)
     const provided =
       req.headers.get('x-shared-secret') ??
       req.headers.get('x-pikago-secret') ??
       ''
+    
+    console.log(`[import-order] Secret check: provided='${provided}', expected='${IMPORT_SECRET}'`)
+    
     if (IMPORT_SECRET && provided !== IMPORT_SECRET) {
+      console.error('[import-order] ❌ Unauthorized - secret mismatch')
       return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
     }
+    
+    console.log('[import-order] ✅ Authorization passed')
 
     const body = (await req.json().catch(() => ({}))) || {}
+    console.log('[import-order] Request body:', JSON.stringify(body, null, 2))
+    
     const raw = body?.order ?? body?.data ?? body?.payload ?? body ?? {}
+    console.log('[import-order] Extracted raw order:', JSON.stringify(raw, null, 2))
 
     const id =
-      firstString(raw.id, raw.orderId, raw.order_id, raw.source_order_id, body.id) ?? null
+      firstString(raw.id, raw.orderId, raw.order_id, raw.source_order_id, body.id, body.orderId) ?? null
+    
+    console.log(`[import-order] Extracted order ID: ${id}`)
 
     const ironOrder =
       raw && hasAnyOrderFields(raw) ? raw : await fetchIronOrder(id)
+    
+    console.log('[import-order] Iron order data:', JSON.stringify(ironOrder, null, 2))
 
     if (!ironOrder || !id) {
+      console.error(`[import-order] ❌ Missing data: ironOrder=${!!ironOrder}, id=${id}`)
       return NextResponse.json({ ok: false, error: 'missing order.id' }, { status: 400 })
     }
+    
+    console.log('[import-order] ✅ Order data validated, proceeding with import')
 
     const nowIso = new Date().toISOString()
     const row: any = {
@@ -110,23 +131,39 @@ function hasAnyOrderFields(o: any) {
   return keys.some((k) => indicative.includes(k))
 }
 async function fetchIronOrder(orderId: string | null) {
-  if (!orderId || !IRON_BASE) return null
+  if (!orderId || !IRON_BASE) {
+    console.log(`[import-order] Cannot fetch order: orderId=${orderId}, IRON_BASE=${IRON_BASE}`)
+    return null
+  }
+  
   const url = `${IRON_BASE.replace(/\/+$/, '')}/api/admin/orders/${encodeURIComponent(orderId)}`
+  console.log(`[import-order] Fetching order from: ${url}`)
+  console.log(`[import-order] Using token: ${IRON_TOKEN ? 'TOKEN_SET' : 'TOKEN_MISSING'}`)
+  
   try {
     const res = await fetch(url, {
       headers: {
-        Authorization: `Bearer ${IRON_TOKEN}`,
-        Accept: 'application/json',
+        'x-shared-secret': IRON_TOKEN, // Use x-shared-secret instead of Bearer
+        'Accept': 'application/json',
       },
     })
+    
+    const responseText = await res.text()
+    console.log(`[import-order] IronXpress fetch response: ${res.status}`)
+    console.log(`[import-order] Response body: ${responseText}`)
+    
     if (!res.ok) {
-      console.warn('[import-order] IronXpress fetch failed:', res.status, await res.text())
+      console.error('[import-order] IronXpress fetch failed:', res.status, responseText)
       return null
     }
-    const data = await res.json()
-    return (data?.order ?? data) || null
+    
+    const data = JSON.parse(responseText)
+    const order = (data?.order ?? data) || null
+    console.log('[import-order] Parsed order data:', JSON.stringify(order, null, 2))
+    
+    return order
   } catch (e) {
-    console.warn('[import-order] IronXpress fetch exception:', e)
+    console.error('[import-order] IronXpress fetch exception:', e)
     return null
   }
 }
