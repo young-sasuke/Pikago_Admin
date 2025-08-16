@@ -1,6 +1,7 @@
 // app/api/import-order/route.ts  (Pikago)
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import crypto from 'crypto'
 
 export const runtime = 'nodejs'
 
@@ -14,46 +15,56 @@ const IRON_TOKEN =
 export async function POST(req: NextRequest) {
   console.log('[import-order] 📥 Received import request from IronXpress')
   try {
-    // Log headers for debugging
+    // Log headers for debugging (safe in dev)
     const headers = Object.fromEntries(req.headers.entries())
     console.log('[import-order] Headers:', JSON.stringify(headers, null, 2))
-    
+
     // Shared-secret check (IronXpress -> Pikago)
     const provided =
       req.headers.get('x-shared-secret') ??
       req.headers.get('x-pikago-secret') ??
       ''
-    
-    console.log(`[import-order] Secret check: provided='${provided}', expected='${IMPORT_SECRET}'`)
-    
+
+    console.log(
+      `[import-order] Secret check: provided='${provided}', expected='${IMPORT_SECRET}'`
+    )
+
     if (IMPORT_SECRET && provided !== IMPORT_SECRET) {
       console.error('[import-order] ❌ Unauthorized - secret mismatch')
       return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
     }
-    
+
     console.log('[import-order] ✅ Authorization passed')
 
     const body = (await req.json().catch(() => ({}))) || {}
     console.log('[import-order] Request body:', JSON.stringify(body, null, 2))
-    
+
     const raw = body?.order ?? body?.data ?? body?.payload ?? body ?? {}
     console.log('[import-order] Extracted raw order:', JSON.stringify(raw, null, 2))
 
     const id =
-      firstString(raw.id, raw.orderId, raw.order_id, raw.source_order_id, body.id, body.orderId) ?? null
-    
+      firstString(
+        raw.id,
+        raw.orderId,
+        raw.order_id,
+        raw.source_order_id,
+        body.id,
+        body.orderId
+      ) ?? null
+
     console.log(`[import-order] Extracted order ID: ${id}`)
 
+    // If the payload doesn't actually contain order fields, fetch from IronXpress
     const ironOrder =
       raw && hasAnyOrderFields(raw) ? raw : await fetchIronOrder(id)
-    
+
     console.log('[import-order] Iron order data:', JSON.stringify(ironOrder, null, 2))
 
     if (!ironOrder || !id) {
       console.error(`[import-order] ❌ Missing data: ironOrder=${!!ironOrder}, id=${id}`)
       return NextResponse.json({ ok: false, error: 'missing order.id' }, { status: 400 })
     }
-    
+
     console.log('[import-order] ✅ Order data validated, proceeding with import')
 
     const nowIso = new Date().toISOString()
@@ -90,15 +101,30 @@ export async function POST(req: NextRequest) {
       delivery_slot_end_time: t(ironOrder.delivery_slot_end_time),
     }
 
-    const { error } = await supabaseAdmin.from('orders').upsert(row, { onConflict: 'id' })
-    if (error) {
-      console.error('[import-order] orders_upsert_failed:', error)
-      return NextResponse.json(
-        { ok: false, error: 'orders_upsert_failed', details: error.message },
-        { status: 500 }
-      )
+    // Upsert into Pikago.orders
+    {
+      const { error } = await supabaseAdmin.from('orders').upsert(row, { onConflict: 'id' })
+      if (error) {
+        console.error('[import-order] orders_upsert_failed:', error)
+        return NextResponse.json(
+          { ok: false, error: 'orders_upsert_failed', details: error.message },
+          { status: 500 }
+        )
+      }
     }
 
+    // Import/replace order_items (idempotent)
+    try {
+      const items = normalizeItems(String(id), ironOrder)
+      console.log(`[import-order] Items to upsert: ${items.length}`)
+      await replaceOrderItems(String(id), items)
+      console.log('[import-order] ✅ order_items upserted successfully')
+    } catch (e) {
+      console.warn('[import-order] ⚠️ order_items upsert warning:', e)
+      // Keep old behavior: do not fail full import if items fail
+    }
+
+    // Keep response shape unchanged
     return NextResponse.json({ ok: true })
   } catch (e: any) {
     console.error('[import-order] exception:', e)
@@ -106,7 +132,60 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/* helpers */
+/* ------------ items helpers ------------ */
+
+function normalizeItems(orderId: string, full: any) {
+  const raw = Array.isArray(full?.order_items)
+    ? full.order_items
+    : Array.isArray(full?.items)
+    ? full.items
+    : []
+
+  const now = new Date().toISOString()
+
+  return raw.map((it: any, idx: number) => {
+    const product_name = nonEmpty(it.product_name ?? it.name ?? it.title ?? `Item ${idx + 1}`)
+    const product_price = num(it.product_price ?? it.price ?? 0)
+    const service_type = nonEmpty(it.service_type ?? it.service ?? 'standard')
+    const service_price = num(it.service_price ?? 0)
+    const qty = int(it.quantity ?? 1)
+    const total_price = num(
+      it.total_price ?? (Number(product_price ?? 0) + Number(service_price ?? 0)) * qty
+    )
+    const product_id = it.product_id ?? null
+    const product_image = stringOrEmpty(it.product_image ?? it.image ?? it.photo ?? '')
+
+    return {
+      id: crypto.randomUUID(),
+      order_id: orderId,
+      product_name,
+      product_price: nz(product_price),
+      service_type,
+      service_price: nz(service_price),
+      quantity: nz(qty),
+      total_price: nz(total_price),
+      created_at: now,
+      updated_at: now,
+      product_id,
+      product_image, // NOT NULL in schema; empty string is acceptable
+    }
+  })
+}
+
+async function replaceOrderItems(orderId: string, items: any[]) {
+  // Delete old items for idempotency
+  const { error: delErr } = await supabaseAdmin.from('order_items').delete().eq('order_id', orderId)
+  if (delErr) throw delErr
+
+  if (!items.length) return { deleted: 0, inserted: 0 }
+
+  const { error: insErr } = await supabaseAdmin.from('order_items').insert(items)
+  if (insErr) throw insErr
+
+  return { deleted: 0, inserted: items.length }
+}
+
+/* ------------- existing helpers ------------- */
 function firstString(...vals: any[]) {
   for (const v of vals) {
     if (v === 0) return '0'
@@ -116,51 +195,82 @@ function firstString(...vals: any[]) {
   }
   return null
 }
-function num(v: any) { const n = Number(v); return Number.isFinite(n) ? n : null }
-function d(v: any) { if (!v) return null; const x = new Date(v); return isNaN(+x) ? null : x.toISOString().slice(0,10) }
+function num(v: any) {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+function nz(n: any) {
+  return Number.isFinite(n) ? n : 0
+}
+function d(v: any) {
+  if (!v) return null
+  const x = new Date(v)
+  return isNaN(+x) ? null : x.toISOString().slice(0, 10)
+}
 function t(v: any) {
   if (!v) return null
-  const s = String(v); const m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/)
-  if (!m) return null; return `${m[1].padStart(2,'0')}:${m[2].padStart(2,'0')}:${(m[3]??'00').padStart(2,'0')}`
+  const s = String(v)
+  const m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/)
+  if (!m) return null
+  return `${m[1].padStart(2, '0')}:${m[2].padStart(2, '0')}:${(m[3] ?? '00').padStart(2, '0')}`
 }
-function bool(v: any) { if (typeof v === 'boolean') return v; if (v==='true') return true; if (v==='false') return false; return null }
+function bool(v: any) {
+  if (typeof v === 'boolean') return v
+  if (v === 'true') return true
+  if (v === 'false') return false
+  return null
+}
+function nonEmpty(v: any) {
+  const s = String(v ?? '').trim()
+  return s.length ? s : 'Item'
+}
+function stringOrEmpty(v: any) {
+  return (v ?? '').toString()
+}
+function int(v: any) {
+  const n = parseInt(v, 10)
+  return Number.isFinite(n) ? n : 0
+}
 function hasAnyOrderFields(o: any) {
   if (!o || typeof o !== 'object') return false
   const keys = Object.keys(o)
   const indicative = ['total_amount', 'payment_method', 'payment_status', 'delivery_address']
   return keys.some((k) => indicative.includes(k))
 }
+
 async function fetchIronOrder(orderId: string | null) {
   if (!orderId || !IRON_BASE) {
-    console.log(`[import-order] Cannot fetch order: orderId=${orderId}, IRON_BASE=${IRON_BASE}`)
+    console.log(`[import-order] Cannot fetch order: orderId=${orderId}, IRON_BASE='${IRON_BASE}'`)
     return null
   }
-  
+
   const url = `${IRON_BASE.replace(/\/+$/, '')}/api/admin/orders/${encodeURIComponent(orderId)}`
   console.log(`[import-order] Fetching order from: ${url}`)
   console.log(`[import-order] Using token: ${IRON_TOKEN ? 'TOKEN_SET' : 'TOKEN_MISSING'}`)
-  
+
   try {
     const res = await fetch(url, {
       headers: {
-        'x-shared-secret': IRON_TOKEN, // Use x-shared-secret instead of Bearer
-        'Accept': 'application/json',
+        'x-shared-secret': IRON_TOKEN, // Internal path (no user token needed)
+        Accept: 'application/json',
       },
+      cache: 'no-store',
     })
-    
+
     const responseText = await res.text()
     console.log(`[import-order] IronXpress fetch response: ${res.status}`)
     console.log(`[import-order] Response body: ${responseText}`)
-    
+
     if (!res.ok) {
       console.error('[import-order] IronXpress fetch failed:', res.status, responseText)
       return null
     }
-    
+
     const data = JSON.parse(responseText)
+    // IronXpress route returns { order: {.., order_items: [...] } }
     const order = (data?.order ?? data) || null
     console.log('[import-order] Parsed order data:', JSON.stringify(order, null, 2))
-    
+
     return order
   } catch (e) {
     console.error('[import-order] IronXpress fetch exception:', e)
