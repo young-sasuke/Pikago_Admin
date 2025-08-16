@@ -29,6 +29,12 @@ const navigation = [
     icon: Package,
   },
   {
+  name: 'Store Address',
+  href: '/admin/stores',
+  icon: Database,
+  },
+
+  {
     name: 'Assignments',
     href: '/admin/assignments',
     icon: Truck,

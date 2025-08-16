@@ -26,6 +26,7 @@ import {
   Phone,
   Truck,
   CheckCircle,
+  Store,
 } from 'lucide-react'
 
 /** “Accepted” tab shows accepted + confirmed */
@@ -223,7 +224,10 @@ function AssignRiderModal({
   riders: UserRow[]
 }) {
   const [selectedRiderId, setSelectedRiderId] = useState('')
+  const [selectedAddressId, setSelectedAddressId] = useState('')
   const [isAssigning, setIsAssigning] = useState(false)
+  const [storeAddresses, setStoreAddresses] = useState<{id: string, address: any}[]>([])
+  const [loadingAddresses, setLoadingAddresses] = useState(true)
 
   const handleAssign = async () => {
     if (!selectedRiderId || !order) return
@@ -255,14 +259,66 @@ function AssignRiderModal({
   // Show users that are active & available (defaults true if no delivery_partners row)
   const available = riders.filter((r) => r.is_active !== false && r.is_available !== false)
 
+  // Fetch store addresses when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      fetchStoreAddresses()
+    }
+  }, [isOpen])
+
+  async function fetchStoreAddresses() {
+    setLoadingAddresses(true)
+    try {
+      const res = await fetch('/api/admin/store-address', { cache: 'no-store' })
+      const data = await res.json()
+      if (data?.ok) {
+        setStoreAddresses(data.data ?? [])
+      } else {
+        console.error('Failed to load store addresses:', data?.error)
+      }
+    } catch (e) {
+      console.error('Error fetching store addresses:', e)
+    } finally {
+      setLoadingAddresses(false)
+    }
+  }
+
+  // Helper function to format address with better structure
+  function formatAddressDisplay(a: any) {
+    if (!a || typeof a !== 'object') {
+      return {
+        name: 'Unknown Store',
+        addressLine1: '—',
+        addressLine2: null,
+        cityStatePin: '—',
+        phone: null
+      }
+    }
+    
+    const addressLine1 = a.address_line_1 || ''
+    const addressLine2 = a.address_line_2 || ''
+    const landmark = a.landmark ? ` (${a.landmark})` : ''
+    
+    const cityParts = [a.city, a.state, a.pincode].filter(Boolean)
+    const cityStatePin = cityParts.length > 0 ? cityParts.join(', ') : '—'
+    
+    return {
+      name: a.recipient_name || 'Store Location',
+      addressLine1: addressLine1,
+      addressLine2: addressLine2 + landmark,
+      cityStatePin: cityStatePin,
+      phone: a.phone_number || null
+    }
+  }
+
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Assign Rider" size="lg">
+    <Modal isOpen={isOpen} onClose={onClose} title="Assign Rider" size="xl">
       {order && (
         <div className="space-y-6">
           {/* Order Summary */}
           <div className="bg-gray-50 rounded-lg p-4">
-            <h4 className="font-medium text-gray-900 mb-2">Order Summary</h4>
-            <div className="grid grid-cols-2 gap-4 text-sm">
+            <h4 className="font-medium text-gray-900 mb-3">Order Summary</h4>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
               <div>
                 <span className="text-gray-500">Order ID:</span>
                 <span className="ml-2 font-medium">#{order.id.slice(0, 8)}</span>
@@ -280,17 +336,19 @@ function AssignRiderModal({
                 <span className="ml-2 font-medium">{order.phone || 'N/A'}</span>
               </div>
             </div>
-            <div className="mt-2">
-              <span className="text-gray-500">Address:</span>
+            <div className="mt-3">
+              <span className="text-gray-500">Delivery Address:</span>
               <span className="ml-2 text-sm">{order.delivery_address || 'N/A'}</span>
             </div>
           </div>
 
-          {/* Riders (Users) */}
-          <div>
-            <h4 className="font-medium text-gray-900 mb-3">
-              Available Riders ({available.length})
-            </h4>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Riders (Users) */}
+            <div>
+              <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
+                <Truck className="h-4 w-4 text-blue-600" />
+                Available Riders ({available.length})
+              </h4>
             {available.length === 0 ? (
               <div className="text-center py-8 text-gray-500">
                 <Truck className="h-8 w-8 mx-auto mb-2 opacity-50" />
@@ -336,20 +394,113 @@ function AssignRiderModal({
                 ))}
               </div>
             )}
+            </div>
+            
+            {/* Store Addresses */}
+            <div>
+              <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
+                <Store className="h-4 w-4 text-green-600" />
+                Pickup Addresses ({storeAddresses.length})
+              </h4>
+              {loadingAddresses ? (
+                <div className="text-center py-4 text-gray-500">
+                  <div className="h-8 w-8 mx-auto mb-2 border-2 border-gray-200 border-t-blue-600 rounded-full animate-spin"></div>
+                  <p>Loading addresses...</p>
+                </div>
+              ) : storeAddresses.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  <MapPin className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                  <p>No store addresses available</p>
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {storeAddresses.map((store) => {
+                    const addressInfo = formatAddressDisplay(store.address)
+                    return (
+                      <label
+                        key={store.id}
+                        className={`flex items-start p-3 border rounded-lg cursor-pointer transition-colors ${
+                          selectedAddressId === store.id
+                            ? 'border-green-500 bg-green-50'
+                            : 'border-gray-200 hover:bg-gray-50'
+                        }`}
+                      >
+                        <input
+                          id={`address-${store.id}`}
+                          name="address"
+                          type="radio"
+                          value={store.id}
+                          checked={selectedAddressId === store.id}
+                          onChange={(e) => setSelectedAddressId(e.target.value)}
+                          className="sr-only"
+                        />
+                        <div className="flex items-start w-full">
+                          <div className="flex-shrink-0 mr-3">
+                            <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
+                              <Store className="h-5 w-5 text-green-600" />
+                            </div>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium text-gray-900 mb-1">
+                              {addressInfo.name}
+                            </div>
+                            {addressInfo.addressLine1 && (
+                              <div className="text-sm text-gray-700 mb-1">
+                                {addressInfo.addressLine1}
+                              </div>
+                            )}
+                            {addressInfo.addressLine2 && (
+                              <div className="text-sm text-gray-600 mb-1">
+                                {addressInfo.addressLine2}
+                              </div>
+                            )}
+                            <div className="text-sm text-gray-600 mb-1">
+                              {addressInfo.cityStatePin}
+                            </div>
+                            {addressInfo.phone && (
+                              <div className="flex items-center text-xs text-gray-500">
+                                <Phone className="h-3 w-3 mr-1" />
+                                <span>{addressInfo.phone}</span>
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex-shrink-0 ml-2">
+                            <CheckCircle className={`h-4 w-4 ${
+                              selectedAddressId === store.id ? 'text-green-500' : 'text-gray-300'
+                            }`} />
+                          </div>
+                        </div>
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Actions */}
-          <div className="flex gap-3 justify-end pt-4 border-t">
-            <Button variant="outline" onClick={onClose} disabled={isAssigning}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleAssign}
-              disabled={!selectedRiderId || available.length === 0}
-              isLoading={isAssigning}
-            >
-              Assign Rider
-            </Button>
+          <div className="flex items-center justify-between pt-4 border-t">
+            <div className="text-sm text-gray-600">
+              {selectedRiderId && selectedAddressId ? (
+                <span className="text-green-600">✓ Rider and pickup address selected</span>
+              ) : selectedRiderId ? (
+                <span className="text-amber-600">⚠ Please select a pickup address</span>
+              ) : (
+                <span className="text-gray-500">Please select a rider and pickup address</span>
+              )}
+            </div>
+            <div className="flex gap-3">
+              <Button variant="outline" onClick={onClose} disabled={isAssigning}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleAssign}
+                disabled={!selectedRiderId || available.length === 0}
+                isLoading={isAssigning}
+              >
+                Assign Rider
+              </Button>
+            </div>
           </div>
         </div>
       )}
