@@ -1,59 +1,49 @@
-// app/api/assign/route.ts  (Pikago)
+// app/api/assign/route.ts (Pikago)
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { createClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
 
 export const runtime = 'nodejs'
 
-const IRON_BASE = process.env.IRONXPRESS_BASE_URL ?? 'http://localhost:3000'
-const IRON_TOKEN =
+// --- Typed env (avoid TS “possibly undefined”) ---
+const IRON_BASE_URL: string = process.env.IRONXPRESS_BASE_URL as string
+const IRON_TOKEN_VALUE: string = (
   process.env.IRONXPRESS_AUTH_TOKEN ??
   process.env.IRONXPRESS_SHARED_SECRET ??
-  process.env.IMPORT_SHARED_SECRET ??
-  ''
+  process.env.IMPORT_SHARED_SECRET
+) as string
+const INTERNAL_API_SECRET: string = process.env.INTERNAL_API_SECRET as string
 
-// Direct IronXpress DB client (for status update -> notifications via triggers)
-const IRONXPRESS_URL = 'https://qehtgclgjhzdlqcjujpp.supabase.co'
-const IRONXPRESS_SERVICE_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFlaHRnY2xnamh6ZGxxY2p1anBwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1MDg0OTY3NiwiZXhwIjoyMDY2NDI1Njc2fQ.6wlzcNTxYbpWcP_Kbi6PNiFU7WgfQ66hDf3Zx8mvur0'
-
-const ironxpressAdmin = createClient(IRONXPRESS_URL, IRONXPRESS_SERVICE_KEY, {
-  auth: { persistSession: false },
-})
+if (!IRON_BASE_URL) throw new Error('IRONXPRESS_BASE_URL environment variable is required')
+if (!IRON_TOKEN_VALUE) throw new Error('IRONXPRESS_AUTH_TOKEN or IRONXPRESS_SHARED_SECRET environment variable is required')
+if (!INTERNAL_API_SECRET) throw new Error('INTERNAL_API_SECRET environment variable is required')
 
 export async function POST(req: NextRequest) {
   try {
-    const { orderId: rawOrderId, userId } = await req.json()
+    const {
+      orderId: rawOrderId,
+      userId,
+      selectedAddressId,
+      assignmentType = 'pickup',
+    } = await req.json()
+
     const orderId = String(rawOrderId ?? '').replace(/^#/, '').trim()
-
     if (!orderId || !userId) {
-      return NextResponse.json(
-        { ok: false, error: 'orderId and userId are required' },
-        { status: 400 }
-      )
+      return NextResponse.json({ ok: false, error: 'orderId and userId are required' }, { status: 400 })
     }
 
-    // Ensure order exists locally; if not, import full order + items from IronXpress
-    if (!(await orderExists(orderId))) {
-      const imported = await importFromIronXpress(orderId)
-      if (!imported) {
-        return NextResponse.json(
-          { ok: false, error: `Order ${orderId} not found` },
-          { status: 404 }
-        )
-      }
-    } else {
-      // If no items locally, import items only
-      await ensureItems(orderId)
-    }
+    // Always ensure fresh order + items from IX (idempotent)
+    await ensureOrderAndItemsFromIronXpress(orderId)
 
-    // Update Pikago orders -> set rider + mark assigned
+    // If delivery assignment, keep PG order as "ready_for_delivery" (your requested change)
+    const orderStatus = assignmentType === 'delivery' ? 'ready_for_delivery' : 'assigned'
     const nowIso = new Date().toISOString()
+
+    // Update PG orders table with selected rider and status
     {
       const { error } = await supabaseAdmin
         .from('orders')
-        .update({ user_id: userId, order_status: 'assigned', updated_at: nowIso })
+        .update({ user_id: userId, order_status: orderStatus, updated_at: nowIso })
         .eq('id', orderId)
       if (error) {
         return NextResponse.json(
@@ -63,43 +53,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Re-fetch the FULL order row (after update) to mirror all fields
+    // Re-fetch complete order row for assigned_orders payload
     const { data: orderRow, error: fetchErr } = await supabaseAdmin
       .from('orders')
-      .select(
-        `
-        id,
-        user_id,
-        total_amount,
-        payment_method,
-        payment_status,
-        payment_id,
-        order_status,
-        pickup_date,
-        pickup_slot_id,
-        delivery_date,
-        delivery_slot_id,
-        delivery_type,
-        delivery_address,
-        address_details,
-        applied_coupon_code,
-        discount_amount,
-        created_at,
-        updated_at,
-        status,
-        cancelled_at,
-        cancellation_reason,
-        can_be_cancelled,
-        original_pickup_slot_id,
-        original_delivery_slot_id,
-        pickup_slot_display_time,
-        pickup_slot_start_time,
-        pickup_slot_end_time,
-        delivery_slot_display_time,
-        delivery_slot_start_time,
-        delivery_slot_end_time
-      `
-      )
+      .select('*')
       .eq('id', orderId)
       .maybeSingle()
 
@@ -110,68 +67,102 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Compute rider name to store in assigned_orders.rider_name
     const riderName = await getRiderName(userId)
 
-    // Build assigned_orders payload by spreading ALL order fields,
-    // then overriding assignment-specific fields.
-    const assignedPayload = {
-      ...orderRow,
-      id: orderId,                // PK in assigned_orders
-      user_id: userId,            // assigned rider (Pikago users.id)
-      status: 'assigned',         // assignment status in assigned_orders
-      rider_name: riderName,      // requires column in assigned_orders
-      updated_at: nowIso,         // touch updated_at
-    }
-
-    // Upsert into assigned_orders mirroring the order
-    {
-      const { error } = await supabaseAdmin
-        .from('assigned_orders')
-        .upsert(assignedPayload as any, { onConflict: 'id' })
-
-      if (error) {
-        return NextResponse.json(
-          { ok: false, error: `assigned_orders_upsert_failed: ${error.message}` },
-          { status: 500 }
-        )
+    // Resolve drop_address (for pickup assignment)
+    let dropAddress: any = null
+    if (selectedAddressId) {
+      const { data: addressData, error: addressError } = await supabaseAdmin
+        .from('store_addresses')
+        .select('*')
+        .eq('id', selectedAddressId)
+        .single()
+      if (!addressError) dropAddress = addressData?.address ?? null
+    } else if (assignmentType === 'pickup') {
+      const meta = (orderRow as any)?.metadata ?? null
+      const metaAddr = meta?.store_address ?? meta?.pickup_store_address ?? null
+      if (metaAddr) {
+        dropAddress = metaAddr
+      } else {
+        const ix = await fetchOrderFromIronXpress(orderId)
+        const ixAddr =
+          ix?.store_address ??
+          ix?.metadata?.store_address ??
+          ix?.pickup_store_address ??
+          null
+        if (ixAddr) {
+          dropAddress = ixAddr
+        } else {
+          const { data: list } = await supabaseAdmin
+            .from('store_addresses')
+            .select('*')
+            .order('is_default', { ascending: false })
+            .order('created_at', { ascending: false })
+            .limit(1)
+          dropAddress = list?.[0]?.address ?? null
+        }
       }
     }
 
-    // Notify IronXpress by updating its DB to 'assigned' (triggers push/notification there)
-    await notifyIronXpressAssigned(orderId, userId)
+    // Upsert into assigned_orders (one row per orderId)
+    const assignedPayload: any = {
+      ...orderRow,
+      id: orderId,
+      user_id: userId,
+      status: 'assigned',
+      rider_name: riderName,
+      drop_address: dropAddress,
+      updated_at: nowIso,
+    }
+    delete assignedPayload.metadata
+
+    {
+      const { error } = await supabaseAdmin
+        .from('assigned_orders')
+        .upsert(assignedPayload, { onConflict: 'id' })
+
+      if (error) {
+        // If schema doesn't have drop_address, retry without it
+        const retry = { ...assignedPayload }
+        delete retry.drop_address
+        const { error: e2 } = await supabaseAdmin
+          .from('assigned_orders')
+          .upsert(retry, { onConflict: 'id' })
+        if (e2) {
+          return NextResponse.json(
+            { ok: false, error: `assigned_orders_upsert_failed: ${e2.message}` },
+            { status: 500 }
+          )
+        }
+      }
+    }
+
+    // Mirror to IronXpress:
+    //  - pickup assignment -> IX "assigned"
+    //  - delivery assignment -> IX "shipped" (as agreed earlier)
+    await notifyIronXpressAssigned(orderId, userId, assignmentType)
 
     return NextResponse.json({ ok: true })
   } catch (e: any) {
-    return NextResponse.json(
-      { ok: false, error: e?.message ?? 'unknown_error' },
-      { status: 500 }
-    )
+    return NextResponse.json({ ok: false, error: e?.message ?? 'unknown_error' }, { status: 500 })
   }
 }
 
 /* ---------------- helpers ---------------- */
 
-async function orderExists(id: string) {
-  const { data } = await supabaseAdmin.from('orders').select('id').eq('id', id).maybeSingle()
-  return !!data
-}
-
-async function itemsCount(id: string) {
-  const { count } = await supabaseAdmin
-    .from('order_items')
-    .select('id', { count: 'exact', head: true })
-    .eq('order_id', id)
-  return count ?? 0
-}
-
-async function ensureItems(orderId: string) {
-  const cnt = await itemsCount(orderId)
-  if (cnt > 0) return true
+async function ensureOrderAndItemsFromIronXpress(orderId: string) {
   const full = await fetchOrderFromIronXpress(orderId)
   if (!full) return false
+
+  const ok = await upsertPikagoOrder(orderId, full)
+  if (!ok) return false
+
   const items = normalizeItems(orderId, full)
-  await replaceOrderItems(orderId, items)
+  try {
+    await replaceOrderItems(orderId, items)
+  } catch {
+    // ignore, keep flow
+  }
   return true
 }
 
@@ -181,6 +172,7 @@ async function getRiderName(userId: string): Promise<string> {
     .select('first_name,last_name')
     .eq('user_id', userId)
     .maybeSingle()
+
   const full = [dp?.first_name, dp?.last_name].filter(Boolean).join(' ').trim()
   if (full) return full
 
@@ -194,9 +186,9 @@ async function getRiderName(userId: string): Promise<string> {
 }
 
 async function fetchOrderFromIronXpress(orderId: string) {
-  const url = `${IRON_BASE.replace(/\/+$/, '')}/api/admin/orders/${encodeURIComponent(orderId)}`
+  const url = `${IRON_BASE_URL}/api/admin/orders/${encodeURIComponent(orderId)}`
   const res = await fetch(url, {
-    headers: { 'x-shared-secret': IRON_TOKEN, Accept: 'application/json' },
+    headers: { 'x-shared-secret': IRON_TOKEN_VALUE, Accept: 'application/json' },
     cache: 'no-store',
   })
   if (!res.ok) return null
@@ -204,19 +196,22 @@ async function fetchOrderFromIronXpress(orderId: string) {
   return data?.order ?? data ?? null
 }
 
-async function importFromIronXpress(orderId: string) {
-  const full = await fetchOrderFromIronXpress(orderId)
-  if (!full) return false
-  const ok = await upsertPikagoOrder(orderId, full)
-  if (!ok) return false
-  const items = normalizeItems(orderId, full)
-  await replaceOrderItems(orderId, items)
-  return true
-}
-
 async function upsertPikagoOrder(id: string, o: any) {
   const nowIso = new Date().toISOString()
-  const row: any = {
+
+  const store_address_id =
+    o.store_address_id ??
+    o?.metadata?.store_address_id ??
+    o.pickup_store_address_id ??
+    null
+
+  const store_address =
+    o.store_address ??
+    o?.metadata?.store_address ??
+    o.pickup_store_address ??
+    null
+
+  const baseRow: any = {
     id,
     user_id: null,
     total_amount: num(o.total_amount),
@@ -249,35 +244,49 @@ async function upsertPikagoOrder(id: string, o: any) {
     delivery_slot_end_time: hhmmss(o.delivery_slot_end_time),
   }
 
-  const { error } = await supabaseAdmin.from('orders').upsert(row, { onConflict: 'id' })
-  if (error) {
-    console.warn('[assign] import upsert error:', error)
-    return false
+  const withMeta =
+    store_address || store_address_id
+      ? {
+          ...baseRow,
+          metadata: {
+            ...(o?.metadata ?? {}),
+            store_address_id,
+            store_address,
+          },
+        }
+      : baseRow
+
+  try {
+    const { error } = await supabaseAdmin.from('orders').upsert(withMeta, { onConflict: 'id' })
+    if (!error) return true
+    const { error: e2 } = await supabaseAdmin.from('orders').upsert(baseRow, { onConflict: 'id' })
+    return !e2
+  } catch {
+    try {
+      const { error: e2 } = await supabaseAdmin.from('orders').upsert(baseRow, { onConflict: 'id' })
+      return !e2
+    } catch {
+      return false
+    }
   }
-  return true
 }
 
-async function notifyIronXpressAssigned(orderId: string, riderUserId: string) {
+async function notifyIronXpressAssigned(orderId: string, riderUserId: string, assignmentType: string = 'pickup') {
   try {
-    const { data, error } = await ironxpressAdmin
-      .from('orders')
-      .update({ order_status: 'assigned', updated_at: new Date().toISOString() })
-      .eq('id', orderId)
-      .select('id, order_status')
-      .maybeSingle()
-
-    if (error) {
-      console.error('[assign] ❌ IronXpress DB update failed:', error)
-      return false
-    }
-    if (!data) {
-      console.error(`[assign] ❌ Order ${orderId} not found in IronXpress database`)
-      return false
-    }
-    // IronXpress DB trigger will send the user notification.
+    // pickup -> 'assigned', delivery -> 'shipped'
+    const sourceStatus = assignmentType === 'delivery' ? 'shipped' : 'assigned'
+    const response = await fetch(`${IRON_BASE_URL}/api/admin/orders`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${INTERNAL_API_SECRET}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({ orderId, status: sourceStatus }),
+    })
+    if (!response.ok) return false
     return true
-  } catch (e) {
-    console.error('[assign] ❌ IronXpress DB update exception:', e)
+  } catch {
     return false
   }
 }
@@ -292,7 +301,6 @@ function normalizeItems(orderId: string, full: any) {
     : []
 
   const now = new Date().toISOString()
-
   return raw.map((it: any, idx: number) => {
     const product_name = nonEmpty(it.product_name ?? it.name ?? it.title ?? `Item ${idx + 1}`)
     const product_price = num(it.product_price ?? it.price ?? 0)

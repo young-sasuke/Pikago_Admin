@@ -1,506 +1,722 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useState, useEffect } from 'react'
 import { AdminLayout } from '@/components/layout/AdminLayout'
 import { Button } from '@/components/ui/Button'
+import { Modal } from '@/components/ui/Modal'
 import { LoadingCard } from '@/components/ui/Loading'
-import { Plus, MapPin, Trash2, Store } from 'lucide-react'
+import { toast } from 'react-toastify'
+import {
+  Store,
+  MapPin,
+  Phone,
+  Plus,
+  Eye,
+  Trash2,
+  Edit,
+  Star,
+  Building,
+} from 'lucide-react'
 
-type StoreRow = { id: string; address: any }
+interface StoreAddress {
+  id: string
+  name: string
+  address: {
+    recipient_name: string
+    phone: string
+    address_type: string
+    line1: string
+    line2?: string
+    landmark?: string
+    city: string
+    state: string
+    pincode: string
+    latitude?: number
+    longitude?: number
+  }
+  is_default: boolean
+  created_at: string
+  updated_at: string
+}
 
-type FormState = {
+interface AddressFormData {
+  name: string
   recipient_name: string
-  phone_number: string
-  address_line_1: string
-  address_line_2: string
+  phone: string
+  address_type: string
+  line1: string
+  line2: string
   landmark: string
   city: string
   state: string
   pincode: string
-  address_type: 'Home' | 'Work' | 'Other'
-  is_default: 'true' | 'false'
   latitude: string
   longitude: string
-  user_id: string
+  is_default: boolean
 }
 
-const initialForm: FormState = {
+const initialFormData: AddressFormData = {
+  name: '',
   recipient_name: '',
-  phone_number: '',
-  address_line_1: '',
-  address_line_2: '',
+  phone: '',
+  address_type: 'Store',
+  line1: '',
+  line2: '',
   landmark: '',
   city: '',
   state: '',
   pincode: '',
-  address_type: 'Home',
-  is_default: 'true',
   latitude: '',
   longitude: '',
-  user_id: '',
+  is_default: false,
 }
 
-export default function StoreAddressesPage() {
-  const [rows, setRows] = useState<StoreRow[]>([])
+function AddressFormModal({
+  isOpen,
+  onClose,
+  onSubmit,
+  initialData,
+  isLoading,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  onSubmit: (data: AddressFormData) => void
+  initialData?: AddressFormData
+  isLoading: boolean
+}) {
+  const [formData, setFormData] = useState<AddressFormData>(initialData || initialFormData)
+  const [errors, setErrors] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    if (initialData) {
+      setFormData(initialData)
+    } else {
+      setFormData(initialFormData)
+    }
+    setErrors({})
+  }, [initialData, isOpen])
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    
+    // Validate required fields
+    const newErrors: Record<string, string> = {}
+    const requiredFields = ['name', 'recipient_name', 'phone', 'line1', 'city', 'state', 'pincode']
+    
+    requiredFields.forEach(field => {
+      if (!formData[field as keyof AddressFormData]) {
+        newErrors[field] = 'This field is required'
+      }
+    })
+
+    // Validate phone number (basic)
+    if (formData.phone && !/^\+?[\d\s-()]{10,15}$/.test(formData.phone)) {
+      newErrors.phone = 'Please enter a valid phone number'
+    }
+
+    // Validate pincode
+    if (formData.pincode && !/^\d{6}$/.test(formData.pincode)) {
+      newErrors.pincode = 'Please enter a valid 6-digit pincode'
+    }
+
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors)
+      return
+    }
+
+    onSubmit(formData)
+  }
+
+  const handleChange = (field: keyof AddressFormData, value: string | boolean) => {
+    setFormData(prev => ({ ...prev, [field]: value }))
+    if (errors[field]) {
+      setErrors(prev => ({ ...prev, [field]: '' }))
+    }
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title={initialData ? 'Edit Store Address' : 'Add Store Address'} size="xl">
+      <form onSubmit={handleSubmit} className="space-y-6">
+        {/* Basic Information */}
+        <div>
+          <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
+            <Building className="h-4 w-4" />
+            Store Information
+          </h4>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Store Name *
+              </label>
+              <input
+                type="text"
+                value={formData.name}
+                onChange={(e) => handleChange('name', e.target.value)}
+                className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 ${
+                  errors.name ? 'border-red-500' : 'border-gray-300'
+                }`}
+                placeholder="e.g., Main Store"
+              />
+              {errors.name && <p className="mt-1 text-xs text-red-500">{errors.name}</p>}
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Address Type
+              </label>
+              <select
+                value={formData.address_type}
+                onChange={(e) => handleChange('address_type', e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+              >
+                <option value="Store">Store</option>
+                <option value="Warehouse">Warehouse</option>
+                <option value="Office">Office</option>
+                <option value="Branch">Branch</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Contact Information */}
+        <div>
+          <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
+            <Phone className="h-4 w-4" />
+            Contact Information
+          </h4>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Contact Person Name *
+              </label>
+              <input
+                type="text"
+                value={formData.recipient_name}
+                onChange={(e) => handleChange('recipient_name', e.target.value)}
+                className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 ${
+                  errors.recipient_name ? 'border-red-500' : 'border-gray-300'
+                }`}
+                placeholder="e.g., Store Manager"
+              />
+              {errors.recipient_name && <p className="mt-1 text-xs text-red-500">{errors.recipient_name}</p>}
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Phone Number *
+              </label>
+              <input
+                type="tel"
+                value={formData.phone}
+                onChange={(e) => handleChange('phone', e.target.value)}
+                className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 ${
+                  errors.phone ? 'border-red-500' : 'border-gray-300'
+                }`}
+                placeholder="e.g., +91-9876543210"
+              />
+              {errors.phone && <p className="mt-1 text-xs text-red-500">{errors.phone}</p>}
+            </div>
+          </div>
+        </div>
+
+        {/* Address Details */}
+        <div>
+          <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
+            <MapPin className="h-4 w-4" />
+            Address Details
+          </h4>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Address Line 1 *
+              </label>
+              <input
+                type="text"
+                value={formData.line1}
+                onChange={(e) => handleChange('line1', e.target.value)}
+                className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 ${
+                  errors.line1 ? 'border-red-500' : 'border-gray-300'
+                }`}
+                placeholder="e.g., 123 Industrial Area"
+              />
+              {errors.line1 && <p className="mt-1 text-xs text-red-500">{errors.line1}</p>}
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Address Line 2
+              </label>
+              <input
+                type="text"
+                value={formData.line2}
+                onChange={(e) => handleChange('line2', e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                placeholder="e.g., Phase 2, Unit 12"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Landmark
+              </label>
+              <input
+                type="text"
+                value={formData.landmark}
+                onChange={(e) => handleChange('landmark', e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                placeholder="e.g., Near Metro Station"
+              />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  City *
+                </label>
+                <input
+                  type="text"
+                  value={formData.city}
+                  onChange={(e) => handleChange('city', e.target.value)}
+                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 ${
+                    errors.city ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                  placeholder="e.g., Hyderabad"
+                />
+                {errors.city && <p className="mt-1 text-xs text-red-500">{errors.city}</p>}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  State *
+                </label>
+                <input
+                  type="text"
+                  value={formData.state}
+                  onChange={(e) => handleChange('state', e.target.value)}
+                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 ${
+                    errors.state ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                  placeholder="e.g., Telangana"
+                />
+                {errors.state && <p className="mt-1 text-xs text-red-500">{errors.state}</p>}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Pincode *
+                </label>
+                <input
+                  type="text"
+                  value={formData.pincode}
+                  onChange={(e) => handleChange('pincode', e.target.value)}
+                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 ${
+                    errors.pincode ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                  placeholder="e.g., 500001"
+                />
+                {errors.pincode && <p className="mt-1 text-xs text-red-500">{errors.pincode}</p>}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Location Coordinates (Optional) */}
+        <div>
+          <h4 className="font-medium text-gray-900 mb-3">
+            Location Coordinates (Optional)
+          </h4>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Latitude
+              </label>
+              <input
+                type="number"
+                step="any"
+                value={formData.latitude}
+                onChange={(e) => handleChange('latitude', e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                placeholder="e.g., 17.3850"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Longitude
+              </label>
+              <input
+                type="number"
+                step="any"
+                value={formData.longitude}
+                onChange={(e) => handleChange('longitude', e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                placeholder="e.g., 78.4867"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Default Toggle */}
+        <div className="flex items-center gap-3">
+          <input
+            type="checkbox"
+            id="is_default"
+            checked={formData.is_default}
+            onChange={(e) => handleChange('is_default', e.target.checked)}
+            className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+          />
+          <label htmlFor="is_default" className="text-sm font-medium text-gray-700 flex items-center gap-1">
+            <Star className="h-4 w-4" />
+            Set as default pickup address
+          </label>
+        </div>
+
+        {/* Actions */}
+        <div className="flex items-center justify-end gap-3 pt-4 border-t">
+          <Button type="button" variant="outline" onClick={onClose} disabled={isLoading}>
+            Cancel
+          </Button>
+          <Button type="submit" isLoading={isLoading}>
+            {initialData ? 'Update Address' : 'Add Address'}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+function AddressDetailsModal({
+  isOpen,
+  onClose,
+  address,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  address: StoreAddress | null
+}) {
+  if (!address) return null
+
+  const addr = address.address
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Store Address Details" size="lg">
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+              <Store className="h-5 w-5" />
+              {address.name}
+            </h3>
+            <p className="text-sm text-gray-500">{addr.address_type}</p>
+          </div>
+          {address.is_default && (
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+              <Star className="h-3 w-3 mr-1" />
+              Default
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="bg-gray-50 rounded-lg p-4">
+            <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
+              <Phone className="h-4 w-4" />
+              Contact Information
+            </h4>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-600">Contact Person:</span>
+                <span className="font-medium">{addr.recipient_name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Phone:</span>
+                <span className="font-medium">{addr.phone}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-gray-50 rounded-lg p-4">
+            <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
+              <MapPin className="h-4 w-4" />
+              Location Details
+            </h4>
+            <div className="space-y-2 text-sm">
+              {addr.latitude && addr.longitude && (
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Coordinates:</span>
+                  <span className="font-medium font-mono text-xs">
+                    {addr.latitude}, {addr.longitude}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-gray-50 rounded-lg p-4">
+          <h4 className="font-medium text-gray-900 mb-3">Full Address</h4>
+          <div className="text-sm text-gray-900 space-y-1">
+            <p className="font-medium">{addr.line1}</p>
+            {addr.line2 && <p>{addr.line2}</p>}
+            {addr.landmark && <p className="text-gray-600">Near: {addr.landmark}</p>}
+            <p>{addr.city}, {addr.state} {addr.pincode}</p>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+export default function StoresPage() {
+  const [addresses, setAddresses] = useState<StoreAddress[]>([])
   const [loading, setLoading] = useState(true)
-  const [openForm, setOpenForm] = useState(false)
-  const [form, setForm] = useState<FormState>(initialForm)
+  const [formModalOpen, setFormModalOpen] = useState(false)
+  const [detailsModalOpen, setDetailsModalOpen] = useState(false)
+  const [selectedAddress, setSelectedAddress] = useState<StoreAddress | null>(null)
+  const [editingAddress, setEditingAddress] = useState<StoreAddress | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
-  async function load() {
-    setLoading(true)
+  useEffect(() => {
+    fetchAddresses()
+  }, [])
+
+  async function fetchAddresses() {
     try {
-      const res = await fetch('/api/admin/store-address', { cache: 'no-store' })
-      const data = await res.json()
-      if (data?.ok) setRows(data.data ?? [])
-      else throw new Error(data?.error || 'Failed to load store addresses')
-    } catch (e) {
-      console.error(e)
-      alert('Failed to load store addresses')
+      const response = await fetch('/api/admin/store-address', { cache: 'no-store' })
+      const data = await response.json()
+      if (data.ok) {
+        setAddresses(data.data)
+      } else {
+        toast.error('Failed to load store addresses')
+      }
+    } catch (error) {
+      console.error('Error fetching addresses:', error)
+      toast.error('Failed to load store addresses')
     } finally {
       setLoading(false)
     }
   }
 
-  useEffect(() => { load() }, [])
-
-  function onChange<K extends keyof FormState>(key: K, val: FormState[K]) {
-    setForm((f) => ({ ...f, [key]: val }))
+  const openAddModal = () => {
+    setEditingAddress(null)
+    setFormModalOpen(true)
   }
 
-  async function onAdd(e: React.FormEvent) {
-    e.preventDefault()
+  const openEditModal = (address: StoreAddress) => {
+    const formData: AddressFormData = {
+      name: address.name,
+      recipient_name: address.address.recipient_name,
+      phone: address.address.phone,
+      address_type: address.address.address_type,
+      line1: address.address.line1,
+      line2: address.address.line2 || '',
+      landmark: address.address.landmark || '',
+      city: address.address.city,
+      state: address.address.state,
+      pincode: address.address.pincode,
+      latitude: address.address.latitude?.toString() || '',
+      longitude: address.address.longitude?.toString() || '',
+      is_default: address.is_default,
+    }
+    setEditingAddress(address)
+    setFormModalOpen(true)
+  }
+
+  const openDetailsModal = (address: StoreAddress) => {
+    setSelectedAddress(address)
+    setDetailsModalOpen(true)
+  }
+
+  const handleSubmit = async (formData: AddressFormData) => {
     setSubmitting(true)
     try {
-      // Build the JSON exactly as requested
-      const now = new Date().toISOString()
-      const address = {
-        id: (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
-          ? crypto.randomUUID()
-          : Math.random().toString(36).slice(2), // fallback
-        city: form.city.trim(),
-        state: form.state.trim(),
-        pincode: form.pincode.trim(),
-        user_id: form.user_id.trim() || null,
-        landmark: form.landmark.trim() || null,
-        latitude: form.latitude ? Number(form.latitude) : null,
-        longitude: form.longitude ? Number(form.longitude) : null,
-        created_at: now,
-        is_default: form.is_default === 'true',
-        updated_at: now,
-        address_type: form.address_type,
-        phone_number: form.phone_number.trim(),
-        address_line_1: form.address_line_1.trim(),
-        address_line_2: form.address_line_2.trim() || '',
-        recipient_name: form.recipient_name.trim(),
+      const addressData = {
+        recipient_name: formData.recipient_name,
+        phone: formData.phone,
+        address_type: formData.address_type,
+        line1: formData.line1,
+        line2: formData.line2 || null,
+        landmark: formData.landmark || null,
+        city: formData.city,
+        state: formData.state,
+        pincode: formData.pincode,
+        latitude: formData.latitude ? parseFloat(formData.latitude) : null,
+        longitude: formData.longitude ? parseFloat(formData.longitude) : null,
+        is_default: formData.is_default,
       }
 
-      const res = await fetch('/api/admin/store-address', {
+      const response = await fetch('/api/admin/store-address', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address }),
+        body: JSON.stringify({
+          name: formData.name,
+          addressData,
+        }),
       })
-      const data = await res.json()
-      if (!res.ok || !data?.ok) throw new Error(data?.error ?? 'Add failed')
 
-      setForm(initialForm)
-      setOpenForm(false)
-      await load()
-    } catch (err: any) {
-      alert(err?.message ?? 'Failed to add store address')
+      const result = await response.json()
+      if (result.ok) {
+        toast.success(editingAddress ? 'Address updated successfully!' : 'Address added successfully!')
+        setFormModalOpen(false)
+        await fetchAddresses()
+      } else {
+        toast.error(result.error || 'Failed to save address')
+      }
+    } catch (error) {
+      console.error('Error saving address:', error)
+      toast.error('Failed to save address')
     } finally {
       setSubmitting(false)
     }
   }
 
-  async function onDelete(id: string) {
-    if (!confirm('Delete this store address?')) return
+  const handleDelete = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this address?')) return
+
     try {
-      const res = await fetch(`/api/admin/store-address?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
-      const data = await res.json()
-      if (!res.ok || !data?.ok) throw new Error(data?.error ?? 'Delete failed')
-      await load()
-    } catch (err: any) {
-      alert(err?.message ?? 'Failed to delete')
+      const response = await fetch(`/api/admin/store-address?id=${id}`, {
+        method: 'DELETE',
+      })
+
+      const result = await response.json()
+      if (result.ok) {
+        toast.success('Address deleted successfully!')
+        await fetchAddresses()
+      } else {
+        toast.error(result.error || 'Failed to delete address')
+      }
+    } catch (error) {
+      console.error('Error deleting address:', error)
+      toast.error('Failed to delete address')
     }
   }
 
-  const preview = useMemo(() => {
-    const now = new Date().toISOString()
-    const obj = {
-      id: '<auto>',
-      city: form.city,
-      state: form.state,
-      pincode: form.pincode,
-      user_id: form.user_id || null,
-      landmark: form.landmark || null,
-      latitude: form.latitude ? Number(form.latitude) : null,
-      longitude: form.longitude ? Number(form.longitude) : null,
-      created_at: now,
-      is_default: form.is_default === 'true',
-      updated_at: now,
-      address_type: form.address_type,
-      phone_number: form.phone_number,
-      address_line_1: form.address_line_1,
-      address_line_2: form.address_line_2,
-      recipient_name: form.recipient_name,
-    }
-    try {
-      return JSON.stringify(obj, null, 2)
-    } catch {
-      return ''
-    }
-  }, [form])
-
-  const table = useMemo(
-    () => (
-      <div className="overflow-hidden">
-        <table className="min-w-full text-sm">
-          <thead className="bg-gray-50 text-gray-600">
-            <tr>
-              <th className="px-6 py-3 text-left font-medium">ID</th>
-              <th className="px-6 py-3 text-left font-medium">Store Details</th>
-              <th className="px-6 py-3 text-right font-medium">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {rows.map((r) => (
-              <tr key={r.id} className="hover:bg-gray-50 transition-colors">
-                <td className="px-6 py-4">
-                  <div className="font-mono text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded max-w-fit">
-                    {r.id.slice(0, 8)}...
-                  </div>
-                </td>
-                <td className="px-6 py-4">
-                  <div className="flex items-start gap-3">
-                    <div className="p-2 bg-blue-100 rounded-lg flex-shrink-0">
-                      <MapPin className="h-4 w-4 text-blue-600" />
+  return (
+    <AdminLayout
+      title="Store Addresses"
+      headerActions={
+        <Button onClick={openAddModal}>
+          <Plus className="h-4 w-4 mr-2" />
+          Add Store Address
+        </Button>
+      }
+    >
+      <div className="space-y-6">
+        {loading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {[1, 2, 3].map((i) => (
+              <LoadingCard key={i} />
+            ))}
+          </div>
+        ) : addresses.length === 0 ? (
+          <div className="text-center py-12">
+            <Store className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+            <h3 className="text-lg font-medium text-gray-900 mb-2">
+              No store addresses found
+            </h3>
+            <p className="text-gray-500 mb-6">
+              Add your first store address to enable pickup assignments
+            </p>
+            <Button onClick={openAddModal}>
+              <Plus className="h-4 w-4 mr-2" />
+              Add Store Address
+            </Button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {addresses.map((address) => (
+              <div key={address.id} className="bg-white rounded-lg shadow border hover:shadow-md transition-shadow">
+                <div className="p-6">
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <Store className="h-5 w-5 text-blue-600" />
+                      <h3 className="font-semibold text-gray-900">{address.name}</h3>
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="font-medium text-gray-900">{formatAddressSummary(r.address)}</div>
-                      <div className="mt-1 text-sm text-gray-500">
-                        {r.address?.phone_number && (
-                          <span className="mr-3">📞 {r.address.phone_number}</span>
-                        )}
-                        {r.address?.address_type && (
-                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                            r.address.address_type === 'Home' ? 'bg-green-100 text-green-800' :
-                            r.address.address_type === 'Work' ? 'bg-blue-100 text-blue-800' :
-                            'bg-gray-100 text-gray-800'
-                          }`}>
-                            {r.address.address_type}
-                          </span>
-                        )}
-                        {r.address?.is_default && (
-                          <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                            Default
-                          </span>
-                        )}
+                    {address.is_default && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                        <Star className="h-3 w-3 mr-1" />
+                        Default
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="space-y-2 text-sm text-gray-600">
+                    <div className="flex items-center gap-2">
+                      <Building className="h-4 w-4" />
+                      <span>{address.address.address_type}</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <MapPin className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p>{address.address.line1}</p>
+                        {address.address.line2 && <p>{address.address.line2}</p>}
+                        <p>{address.address.city}, {address.address.state} {address.address.pincode}</p>
                       </div>
                     </div>
+                    <div className="flex items-center gap-2">
+                      <Phone className="h-4 w-4" />
+                      <span>{address.address.phone}</span>
+                    </div>
                   </div>
-                </td>
-                <td className="px-6 py-4 text-right">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => onDelete(r.id)}
-                    className="text-red-600 border-red-200 hover:bg-red-50 hover:border-red-300"
-                  >
-                    <Trash2 className="h-4 w-4 mr-1" />
-                    Delete
-                  </Button>
-                </td>
-              </tr>
+
+                  <div className="flex items-center justify-end gap-2 mt-4 pt-4 border-t">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => openDetailsModal(address)}
+                    >
+                      <Eye className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => openEditModal(address)}
+                    >
+                      <Edit className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDelete(address.id)}
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
             ))}
-            {!rows.length && !loading && (
-              <tr>
-                <td colSpan={3} className="px-6 py-12 text-center">
-                  <div className="flex flex-col items-center justify-center">
-                    <Store className="h-12 w-12 text-gray-400 mb-3" />
-                    <h3 className="text-sm font-medium text-gray-900 mb-1">No store locations</h3>
-                    <p className="text-sm text-gray-500">Get started by adding your first store location.</p>
-                  </div>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    ),
-    [rows, loading]
-  )
-
-  const headerActions = (
-    <Button
-      onClick={() => setOpenForm((v) => !v)}
-      className="flex items-center gap-2"
-    >
-      <Plus className="h-4 w-4" />
-      {openForm ? 'Close Form' : 'Add Store'}
-    </Button>
-  )
-
-  return (
-    <AdminLayout title="Store Address" headerActions={headerActions}>
-      <div className="space-y-6">
-
-      {openForm && (
-        <div className="bg-white rounded-lg shadow">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <div className="flex items-center gap-2">
-              <Plus className="h-5 w-5 text-gray-500" />
-              <h3 className="text-lg font-medium text-gray-900">Add New Store Location</h3>
-            </div>
           </div>
-          
-          <form onSubmit={onAdd} className="p-6 space-y-6">
-            {/* Contact Information */}
-            <div>
-              <h4 className="text-sm font-medium text-gray-900 mb-4">Contact Information</h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Field
-                  label="Recipient name *"
-                  value={form.recipient_name}
-                  onChange={(v) => onChange('recipient_name', v)}
-                  required
-                />
-                <Field
-                  label="Phone number *"
-                  value={form.phone_number}
-                  onChange={(v) => onChange('phone_number', v)}
-                  required
-                />
-              </div>
-            </div>
-
-            {/* Address Details */}
-            <div>
-              <h4 className="text-sm font-medium text-gray-900 mb-4">Address Details</h4>
-              <div className="space-y-4">
-                <Field
-                  label="Address line 1 *"
-                  value={form.address_line_1}
-                  onChange={(v) => onChange('address_line_1', v)}
-                  required
-                />
-                <Field
-                  label="Address line 2"
-                  value={form.address_line_2}
-                  onChange={(v) => onChange('address_line_2', v)}
-                />
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <Field
-                    label="Landmark"
-                    value={form.landmark}
-                    onChange={(v) => onChange('landmark', v)}
-                  />
-                  <Field
-                    label="City *"
-                    value={form.city}
-                    onChange={(v) => onChange('city', v)}
-                    required
-                  />
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <Field
-                    label="State *"
-                    value={form.state}
-                    onChange={(v) => onChange('state', v)}
-                    required
-                  />
-                  <Field
-                    label="Pincode *"
-                    value={form.pincode}
-                    onChange={(v) => onChange('pincode', v)}
-                    required
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Store Settings */}
-            <div>
-              <h4 className="text-sm font-medium text-gray-900 mb-4">Store Settings</h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Select
-                  label="Address type"
-                  value={form.address_type}
-                  onChange={(v) => onChange('address_type', v as any)}
-                  options={['Home', 'Work', 'Other']}
-                />
-                <Select
-                  label="Is default location"
-                  value={form.is_default}
-                  onChange={(v) => onChange('is_default', v as any)}
-                  options={[{ value: 'true', label: 'Yes' }, { value: 'false', label: 'No' }]}
-                />
-              </div>
-            </div>
-
-            {/* Location Coordinates */}
-            <div>
-              <h4 className="text-sm font-medium text-gray-900 mb-4">Location Coordinates (Optional)</h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Field
-                  label="Latitude"
-                  value={form.latitude}
-                  onChange={(v) => onChange('latitude', v)}
-                  placeholder="e.g. 20.3563749"
-                />
-                <Field
-                  label="Longitude"
-                  value={form.longitude}
-                  onChange={(v) => onChange('longitude', v)}
-                  placeholder="e.g. 85.8239589"
-                />
-              </div>
-            </div>
-
-            {/* Advanced Options */}
-            <div>
-              <h4 className="text-sm font-medium text-gray-900 mb-4">Advanced Options</h4>
-              <Field
-                label="User ID (optional)"
-                value={form.user_id}
-                onChange={(v) => onChange('user_id', v)}
-                placeholder="UUID of linked user, if any"
-              />
-            </div>
-
-            {/* Preview */}
-            <div className="border-t border-gray-200 pt-6">
-              <h4 className="text-sm font-medium text-gray-900 mb-3">Data Preview</h4>
-              <div className="rounded-lg bg-gray-50 border border-gray-200 p-4">
-                <div className="mb-2 text-xs font-medium text-gray-600">JSON that will be stored:</div>
-                <pre className="text-[11px] leading-relaxed text-gray-800 overflow-x-auto whitespace-pre-wrap">{preview}</pre>
-              </div>
-            </div>
-
-            {/* Form Actions */}
-            <div className="flex justify-end gap-3 pt-6 border-t border-gray-200">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setOpenForm(false)}
-                disabled={submitting}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={submitting}
-                className="flex items-center gap-2"
-              >
-                {submitting ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    <Store className="h-4 w-4" />
-                    Save Store
-                  </>
-                )}
-              </Button>
-            </div>
-          </form>
-        </div>
-      )}
-
-        {/* Store Addresses Table */}
-        <div className="bg-white rounded-lg shadow">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <div className="flex items-center gap-2">
-              <Store className="h-5 w-5 text-gray-500" />
-              <h3 className="text-lg font-medium text-gray-900">Store Locations</h3>
-            </div>
-          </div>
-          
-          {loading ? (
-            <div className="p-6">
-              <LoadingCard />
-            </div>
-          ) : (
-            table
-          )}
-        </div>
+        )}
       </div>
+
+      {/* Add/Edit Address Modal */}
+      <AddressFormModal
+        isOpen={formModalOpen}
+        onClose={() => {
+          setFormModalOpen(false)
+          setEditingAddress(null)
+        }}
+        onSubmit={handleSubmit}
+        initialData={editingAddress ? {
+          name: editingAddress.name,
+          recipient_name: editingAddress.address.recipient_name,
+          phone: editingAddress.address.phone,
+          address_type: editingAddress.address.address_type,
+          line1: editingAddress.address.line1,
+          line2: editingAddress.address.line2 || '',
+          landmark: editingAddress.address.landmark || '',
+          city: editingAddress.address.city,
+          state: editingAddress.address.state,
+          pincode: editingAddress.address.pincode,
+          latitude: editingAddress.address.latitude?.toString() || '',
+          longitude: editingAddress.address.longitude?.toString() || '',
+          is_default: editingAddress.is_default,
+        } : undefined}
+        isLoading={submitting}
+      />
+
+      {/* Address Details Modal */}
+      <AddressDetailsModal
+        isOpen={detailsModalOpen}
+        onClose={() => {
+          setDetailsModalOpen(false)
+          setSelectedAddress(null)
+        }}
+        address={selectedAddress}
+      />
     </AdminLayout>
   )
-}
-
-/* ---------- small UI helpers ---------- */
-
-function Field(props: {
-  label: string
-  value: string
-  onChange: (v: string) => void
-  required?: boolean
-  placeholder?: string
-}) {
-  const { label, value, onChange, required, placeholder } = props
-  return (
-    <label className="block">
-      <span className="mb-2 block text-sm font-medium text-gray-700">{label}</span>
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        required={required}
-        placeholder={placeholder}
-        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 placeholder-gray-400 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:ring-opacity-20"
-      />
-    </label>
-  )
-}
-
-function Select(props: {
-  label: string
-  value: string
-  options: (string | { value: string; label: string })[]
-  onChange: (v: string) => void
-}) {
-  const { label, value, options, onChange } = props
-  return (
-    <label className="block">
-      <span className="mb-2 block text-sm font-medium text-gray-700">{label}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:ring-opacity-20"
-      >
-        {options.map((o) => {
-          const optionValue = typeof o === 'string' ? o : o.value
-          const optionLabel = typeof o === 'string' ? o : o.label
-          return (
-            <option key={optionValue} value={optionValue} className="text-gray-900">{optionLabel}</option>
-          )
-        })}
-      </select>
-    </label>
-  )
-}
-
-/* ---------- helpers ---------- */
-
-function formatAddressSummary(a: any): string {
-  if (!a || typeof a !== 'object') return '—'
-  const parts = [
-    a.recipient_name,
-    a.address_line_1,
-    a.address_line_2,
-    a.city,
-    a.state,
-    a.pincode,
-  ].filter(Boolean).join(', ')
-  return parts || '—'
-}
-
-function compactJson(a: any): string {
-  try {
-    return JSON.stringify(a)
-  } catch {
-    return ''
-  }
 }

@@ -15,11 +15,10 @@ const IRON_TOKEN =
 export async function POST(req: NextRequest) {
   console.log('[import-order] 📥 Received import request from IronXpress')
   try {
-    // Log headers for debugging (safe in dev)
     const headers = Object.fromEntries(req.headers.entries())
     console.log('[import-order] Headers:', JSON.stringify(headers, null, 2))
 
-    // Shared-secret check (IronXpress -> Pikago)
+    // Shared-secret check
     const provided =
       req.headers.get('x-shared-secret') ??
       req.headers.get('x-pikago-secret') ??
@@ -101,16 +100,39 @@ export async function POST(req: NextRequest) {
       delivery_slot_end_time: t(ironOrder.delivery_slot_end_time),
     }
 
-    // Upsert into Pikago.orders
-    {
-      const { error } = await supabaseAdmin.from('orders').upsert(row, { onConflict: 'id' })
-      if (error) {
-        console.error('[import-order] orders_upsert_failed:', error)
-        return NextResponse.json(
-          { ok: false, error: 'orders_upsert_failed', details: error.message },
-          { status: 500 }
-        )
-      }
+    // ---- NEW: capture store address (no DB schema change) ----
+    const store_address_id =
+      ironOrder.store_address_id ??
+      ironOrder?.metadata?.store_address_id ??
+      ironOrder.pickup_store_address_id ??
+      null
+
+    const store_address =
+      ironOrder.store_address ??
+      ironOrder?.metadata?.store_address ??
+      ironOrder.pickup_store_address ??
+      null
+
+    // Try to upsert WITH metadata (if column exists), else fallback without it
+    const rowWithMeta =
+      store_address || store_address_id
+        ? {
+            ...row,
+            metadata: {
+              ...(ironOrder?.metadata ?? {}),
+              store_address_id,
+              store_address,
+            },
+          }
+        : row
+
+    const upsertErr = await upsertOrderWithFallback(rowWithMeta, row)
+    if (upsertErr) {
+      console.error('[import-order] orders_upsert_failed:', upsertErr)
+      return NextResponse.json(
+        { ok: false, error: 'orders_upsert_failed', details: upsertErr.message ?? String(upsertErr) },
+        { status: 500 }
+      )
     }
 
     // Import/replace order_items (idempotent)
@@ -121,10 +143,9 @@ export async function POST(req: NextRequest) {
       console.log('[import-order] ✅ order_items upserted successfully')
     } catch (e) {
       console.warn('[import-order] ⚠️ order_items upsert warning:', e)
-      // Keep old behavior: do not fail full import if items fail
+      // do not fail the import
     }
 
-    // Keep response shape unchanged
     return NextResponse.json({ ok: true })
   } catch (e: any) {
     console.error('[import-order] exception:', e)
@@ -167,25 +188,41 @@ function normalizeItems(orderId: string, full: any) {
       created_at: now,
       updated_at: now,
       product_id,
-      product_image, // NOT NULL in schema; empty string is acceptable
+      product_image, // NOT NULL in schema; empty string ok
     }
   })
 }
 
 async function replaceOrderItems(orderId: string, items: any[]) {
-  // Delete old items for idempotency
   const { error: delErr } = await supabaseAdmin.from('order_items').delete().eq('order_id', orderId)
   if (delErr) throw delErr
-
   if (!items.length) return { deleted: 0, inserted: 0 }
-
   const { error: insErr } = await supabaseAdmin.from('order_items').insert(items)
   if (insErr) throw insErr
-
   return { deleted: 0, inserted: items.length }
 }
 
 /* ------------- existing helpers ------------- */
+async function upsertOrderWithFallback(rowWithMeta: any, plainRow: any) {
+  // Try with metadata (if present)
+  try {
+    const { error } = await supabaseAdmin.from('orders').upsert(rowWithMeta, { onConflict: 'id' })
+    if (!error) return null
+    // If metadata column missing (or any error), try plain row
+    console.warn('[import-order] Upsert-with-metadata failed, retrying without metadata:', error?.message)
+    const { error: e2 } = await supabaseAdmin.from('orders').upsert(plainRow, { onConflict: 'id' })
+    return e2 ?? null
+  } catch (e: any) {
+    console.warn('[import-order] Upsert threw, retrying without metadata:', e?.message)
+    try {
+      const { error: e2 } = await supabaseAdmin.from('orders').upsert(plainRow, { onConflict: 'id' })
+      return e2 ?? null
+    } catch (e3: any) {
+      return e3
+    }
+  }
+}
+
 function firstString(...vals: any[]) {
   for (const v of vals) {
     if (v === 0) return '0'
@@ -195,18 +232,9 @@ function firstString(...vals: any[]) {
   }
   return null
 }
-function num(v: any) {
-  const n = Number(v)
-  return Number.isFinite(n) ? n : null
-}
-function nz(n: any) {
-  return Number.isFinite(n) ? n : 0
-}
-function d(v: any) {
-  if (!v) return null
-  const x = new Date(v)
-  return isNaN(+x) ? null : x.toISOString().slice(0, 10)
-}
+function num(v: any) { const n = Number(v); return Number.isFinite(n) ? n : null }
+function nz(n: any) { return Number.isFinite(n) ? n : 0 }
+function d(v: any) { if (!v) return null; const x = new Date(v); return isNaN(+x) ? null : x.toISOString().slice(0, 10) }
 function t(v: any) {
   if (!v) return null
   const s = String(v)
@@ -220,17 +248,9 @@ function bool(v: any) {
   if (v === 'false') return false
   return null
 }
-function nonEmpty(v: any) {
-  const s = String(v ?? '').trim()
-  return s.length ? s : 'Item'
-}
-function stringOrEmpty(v: any) {
-  return (v ?? '').toString()
-}
-function int(v: any) {
-  const n = parseInt(v, 10)
-  return Number.isFinite(n) ? n : 0
-}
+function nonEmpty(v: any) { const s = String(v ?? '').trim(); return s.length ? s : 'Item' }
+function stringOrEmpty(v: any) { return (v ?? '').toString() }
+function int(v: any) { const n = parseInt(v, 10); return Number.isFinite(n) ? n : 0 }
 function hasAnyOrderFields(o: any) {
   if (!o || typeof o !== 'object') return false
   const keys = Object.keys(o)
@@ -251,7 +271,7 @@ async function fetchIronOrder(orderId: string | null) {
   try {
     const res = await fetch(url, {
       headers: {
-        'x-shared-secret': IRON_TOKEN, // Internal path (no user token needed)
+        'x-shared-secret': IRON_TOKEN,
         Accept: 'application/json',
       },
       cache: 'no-store',
@@ -262,12 +282,11 @@ async function fetchIronOrder(orderId: string | null) {
     console.log(`[import-order] Response body: ${responseText}`)
 
     if (!res.ok) {
-      console.error('[import-order] IronXpress fetch failed:', res.status, responseText)
+      console.error('[import-order] IronXpress fetch failed', res.status, responseText)
       return null
     }
 
     const data = JSON.parse(responseText)
-    // IronXpress route returns { order: {.., order_items: [...] } }
     const order = (data?.order ?? data) || null
     console.log('[import-order] Parsed order data:', JSON.stringify(order, null, 2))
 

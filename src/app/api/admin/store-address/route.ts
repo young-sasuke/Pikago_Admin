@@ -11,9 +11,10 @@ export const dynamic = 'force-dynamic' // avoid route caching in dev
 
 export async function GET() {
   const { data, error } = await supabaseAdmin
-    .from('store_address')
-    .select('id, address')
-    .order('id', { ascending: false })
+    .from('store_addresses')
+    .select('*')
+    .order('is_default', { ascending: false })
+    .order('created_at', { ascending: false })
 
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
@@ -23,38 +24,43 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => ({} as any))
-    let address = body?.address
+    const body = await req.json()
+    const { name, addressData } = body
 
-    if (!address || typeof address !== 'object') {
-      return NextResponse.json({ ok: false, error: 'address is required' }, { status: 400 })
+    if (!name || !addressData) {
+      return NextResponse.json(
+        { ok: false, error: 'name and addressData are required' },
+        { status: 400 }
+      )
     }
 
-    // Server-side safety: fill required fields and defaults
-    const now = new Date().toISOString()
-    address = {
-      id: address.id || crypto.randomUUID(),
-      city: address.city ?? '',
-      state: address.state ?? '',
-      pincode: address.pincode ?? '',
-      user_id: address.user_id ?? null,
-      landmark: address.landmark ?? null,
-      latitude: address.latitude ?? null,
-      longitude: address.longitude ?? null,
-      created_at: address.created_at ?? now,
-      is_default: !!address.is_default,
-      updated_at: now,
-      address_type: address.address_type ?? 'Home',
-      phone_number: address.phone_number ?? '',
-      address_line_1: address.address_line_1 ?? '',
-      address_line_2: address.address_line_2 ?? '',
-      recipient_name: address.recipient_name ?? '',
+    // Validate required address fields
+    const required = ['recipient_name', 'phone', 'line1', 'city', 'state', 'pincode']
+    for (const field of required) {
+      if (!addressData[field]) {
+        return NextResponse.json(
+          { ok: false, error: `Missing required field: ${field}` },
+          { status: 400 }
+        )
+      }
+    }
+
+    // If this is being set as default, unset other defaults first
+    if (addressData.is_default) {
+      await supabaseAdmin
+        .from('store_addresses')
+        .update({ is_default: false })
+        .neq('id', '00000000-0000-0000-0000-000000000000') // dummy condition since we're creating new
     }
 
     const { data, error } = await supabaseAdmin
-      .from('store_address')
-      .insert({ address })
-      .select('id, address')
+      .from('store_addresses')
+      .insert({
+        name,
+        address: addressData,
+        is_default: addressData.is_default || false
+      })
+      .select()
       .single()
 
     if (error) {
@@ -72,7 +78,7 @@ export async function DELETE(req: NextRequest) {
   if (!id) {
     return NextResponse.json({ ok: false, error: 'id is required' }, { status: 400 })
   }
-  const { error } = await supabaseAdmin.from('store_address').delete().eq('id', id)
+  const { error } = await supabaseAdmin.from('store_addresses').delete().eq('id', id)
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
   }
