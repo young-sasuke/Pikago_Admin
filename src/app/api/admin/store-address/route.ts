@@ -19,7 +19,24 @@ export async function GET() {
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
   }
-  return NextResponse.json({ ok: true, data: data ?? [] })
+  
+  // Ensure latitude/longitude are properly formatted (not null if they exist)
+  const processedData = (data ?? []).map(item => {
+    if (item.address) {
+      const addr = item.address
+      item.address = {
+        ...addr,
+        latitude: addr.latitude || addr.lat || undefined,
+        longitude: addr.longitude || addr.lng || undefined,
+      }
+      // Remove null lat/lng to avoid issues
+      if (item.address.latitude === null) delete item.address.latitude
+      if (item.address.longitude === null) delete item.address.longitude
+    }
+    return item
+  })
+  
+  return NextResponse.json({ ok: true, data: processedData })
 }
 
 export async function POST(req: NextRequest) {
@@ -45,6 +62,23 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Normalize lat/lng fields to avoid nulls
+    const normalizedAddress = {
+      ...addressData,
+      latitude: addressData.latitude || addressData.lat || undefined,
+      longitude: addressData.longitude || addressData.lng || undefined,
+    }
+    // Remove null/undefined lat/lng
+    if (normalizedAddress.latitude == null) delete normalizedAddress.latitude
+    if (normalizedAddress.longitude == null) delete normalizedAddress.longitude
+    if (normalizedAddress.lat != null) delete normalizedAddress.lat
+    if (normalizedAddress.lng != null) delete normalizedAddress.lng
+    
+    console.log(`[Store Address] 📍 Creating address with lat/lng:`, {
+      name,
+      hasLatLng: !!(normalizedAddress.latitude && normalizedAddress.longitude)
+    })
+
     // If this is being set as default, unset other defaults first
     if (addressData.is_default) {
       await supabaseAdmin
@@ -57,7 +91,7 @@ export async function POST(req: NextRequest) {
       .from('store_addresses')
       .insert({
         name,
-        address: addressData,
+        address: normalizedAddress,
         is_default: addressData.is_default || false
       })
       .select()

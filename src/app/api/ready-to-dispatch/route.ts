@@ -11,7 +11,7 @@ const IRON_TOKEN_RAW =
   process.env.IRONXPRESS_AUTH_TOKEN ??
   process.env.IRONXPRESS_SHARED_SECRET ??
   process.env.IMPORT_SHARED_SECRET
-const INTERNAL_API_SHARED_SECRET_RAW = process.env.INTERNAL_API_SHARED_SECRET
+const INTERNAL_API_SECRET_RAW = process.env.INTERNAL_API_SECRET
 
 // Runtime validation (same as before)
 if (!IRON_BASE_RAW) {
@@ -22,14 +22,14 @@ if (!IRON_TOKEN_RAW) {
     'IRONXPRESS_AUTH_TOKEN or IRONXPRESS_SHARED_SECRET environment variable is required'
   )
 }
-if (!INTERNAL_API_SHARED_SECRET_RAW) {
-  throw new Error('INTERNAL_API_SHARED_SECRET environment variable is required')
+if (!INTERNAL_API_SECRET_RAW) {
+  throw new Error('INTERNAL_API_SECRET environment variable is required')
 }
 
 // TS-safe non-null values (use these everywhere below)
 const IRON_BASE = IRON_BASE_RAW as string
 const IRON_TOKEN = IRON_TOKEN_RAW as string
-const INTERNAL_API_SHARED_SECRET = INTERNAL_API_SHARED_SECRET_RAW as string
+const INTERNAL_API_SECRET = INTERNAL_API_SECRET_RAW as string
 
 /**
  * Ready to Dispatch endpoint
@@ -40,10 +40,10 @@ const INTERNAL_API_SHARED_SECRET = INTERNAL_API_SHARED_SECRET_RAW as string
  */
 export async function POST(req: NextRequest) {
   try {
-    // Authentication check - only accept INTERNAL_API_SHARED_SECRET
+    // Authentication check - only accept INTERNAL_API_SECRET
     const authHeader = req.headers.get('authorization')
     const sharedSecretHeader = req.headers.get('x-shared-secret')
-    const expectedSecret = INTERNAL_API_SHARED_SECRET
+    const expectedSecret = INTERNAL_API_SECRET
 
     const authType = authHeader ? 'Bearer' : sharedSecretHeader ? 'x-shared-secret' : 'none'
     console.log(`[Ready to Dispatch] 🔐 Auth attempt with ${authType} header`)
@@ -121,7 +121,7 @@ export async function POST(req: NextRequest) {
     const response = await fetch(`${IRON_BASE}/api/admin/orders`, {
       method: 'PATCH',
       headers: {
-        Authorization: `Bearer ${INTERNAL_API_SHARED_SECRET}`,
+        'x-shared-secret': INTERNAL_API_SECRET,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({

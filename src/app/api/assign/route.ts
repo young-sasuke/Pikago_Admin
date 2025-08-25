@@ -35,9 +35,11 @@ export async function POST(req: NextRequest) {
     // Always ensure fresh order + items from IX (idempotent)
     await ensureOrderAndItemsFromIronXpress(orderId)
 
-    // If delivery assignment, keep PG order as "ready_for_delivery" (your requested change)
+    // FIX: If delivery assignment, keep PG order as "ready_for_delivery" 
     const orderStatus = assignmentType === 'delivery' ? 'ready_for_delivery' : 'assigned'
     const nowIso = new Date().toISOString()
+    
+    console.log(`[Assign] 🔄 Processing ${assignmentType} assignment for order ${orderId}, status: ${orderStatus}`)
 
     // Update PG orders table with selected rider and status
     {
@@ -139,8 +141,12 @@ export async function POST(req: NextRequest) {
 
     // Mirror to IronXpress:
     //  - pickup assignment -> IX "assigned"
-    //  - delivery assignment -> IX "shipped" (as agreed earlier)
-    await notifyIronXpressAssigned(orderId, userId, assignmentType)
+    //  - delivery assignment -> NO notification here (shipped sent later when delivery rider picks up)
+    if (assignmentType === 'pickup') {
+      await notifyIronXpressAssigned(orderId, userId, assignmentType)
+    } else {
+      console.log(`[Assign] 🗺️ Skipping IX notification for delivery assignment - shipped will be sent when delivery rider picks up`)
+    }
 
     return NextResponse.json({ ok: true })
   } catch (e: any) {
@@ -273,20 +279,24 @@ async function upsertPikagoOrder(id: string, o: any) {
 
 async function notifyIronXpressAssigned(orderId: string, riderUserId: string, assignmentType: string = 'pickup') {
   try {
-    // pickup -> 'assigned', delivery -> 'shipped'
-    const sourceStatus = assignmentType === 'delivery' ? 'shipped' : 'assigned'
+    console.log(`[Assign] 🔄 Notifying IronXpress: ${orderId} -> assigned`)
     const response = await fetch(`${IRON_BASE_URL}/api/admin/orders`, {
       method: 'PATCH',
       headers: {
-        Authorization: `Bearer ${INTERNAL_API_SECRET}`,
+        'x-shared-secret': INTERNAL_API_SECRET,
         'Content-Type': 'application/json',
         Accept: 'application/json',
       },
-      body: JSON.stringify({ orderId, status: sourceStatus }),
+      body: JSON.stringify({ orderId, status: 'assigned' }),
     })
-    if (!response.ok) return false
+    if (!response.ok) {
+      console.warn(`[Assign] ❌ Failed to notify IronXpress: ${response.status}`)
+      return false
+    }
+    console.log(`[Assign] ✅ Successfully notified IronXpress: ${orderId} -> assigned`)
     return true
-  } catch {
+  } catch (error) {
+    console.warn(`[Assign] ❌ Exception notifying IronXpress:`, error)
     return false
   }
 }

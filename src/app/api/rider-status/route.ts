@@ -25,7 +25,7 @@ const STATUS_MAPPING = {
   'picked_up': {
     platformStatus: 'picked_up',
     assignmentStatus: 'picked_up', 
-    sourceStatus: null, // IX admin must explicitly mark as 'received'
+    sourceStatus: 'reached', // Sync to IX as 'reached' so admin sees Received button
     customerNotification: null // no auto notification
   },
   // In transit status (UI compatibility)
@@ -224,7 +224,7 @@ async function updateSourceSystemStatus(orderId: string, status: string, origina
     const response = await fetch(`${IRON_BASE}/api/admin/orders`, {
       method: 'PATCH',
       headers: {
-        'Authorization': `Bearer ${INTERNAL_API_SECRET}`,
+        'x-shared-secret': INTERNAL_API_SECRET,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
