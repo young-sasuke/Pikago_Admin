@@ -114,6 +114,6 @@ export async function GET(req: NextRequest) {
       updatedAt: assignment.updated_at,
     })
   } catch {
-    return NextResponse.json({ error: 'Failed to fetch order status' }, { status: 500 })
+    return NextResponse.json({ error: 'Failed to fetch order status' }, { status: 500 }) 
   }
 }

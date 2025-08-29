@@ -194,12 +194,14 @@ function normalizeItems(orderId: string, full: any) {
 }
 
 async function replaceOrderItems(orderId: string, items: any[]) {
-  const { error: delErr } = await supabaseAdmin.from('order_items').delete().eq('order_id', orderId)
-  if (delErr) throw delErr
-  if (!items.length) return { deleted: 0, inserted: 0 }
-  const { error: insErr } = await supabaseAdmin.from('order_items').insert(items)
-  if (insErr) throw insErr
-  return { deleted: 0, inserted: items.length }
+  const { error } = await supabaseAdmin.rpc('replace_order_items', {
+    order_id_to_update: orderId,
+    new_items: items,
+  })
+
+  if (error) {
+    throw error
+  }
 }
 
 /* ------------- existing helpers ------------- */
