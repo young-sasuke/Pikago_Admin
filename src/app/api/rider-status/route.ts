@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createClient } from '@supabase/supabase-js'
+import { upsertAssignedOrderWithSync } from '@/lib/db-sync'
 
 export const runtime = 'nodejs'
 
@@ -161,7 +162,7 @@ export async function POST(req: NextRequest) {
 
     console.log(`[Rider Webhooks] ✅ Updated platform order to ${mapping.platformStatus}`)
 
-    // 3. Mirror complete order context into assigned_orders with assignment status
+    // 3. Mirror complete order context into assigned_orders with AUTO-SYNC for picked_up
     const assignedOrderPayload = {
       ...currentOrder,
       status: mapping.assignmentStatus, // assignment-specific status
@@ -170,30 +171,58 @@ export async function POST(req: NextRequest) {
       updated_at: nowIso,
     }
 
-    const { error: assignedUpdateError } = await supabaseAdmin
-      .from('assigned_orders')
-      .upsert(assignedOrderPayload, { onConflict: 'id' })
+    // CRITICAL: Use sync-enabled upsert that automatically handles picked_up → reached
+    const { error: assignedUpdateError } = await upsertAssignedOrderWithSync(assignedOrderPayload, { onConflict: 'id' })
 
     if (assignedUpdateError) {
       console.warn('[Rider Webhooks] ⚠️ Failed to update assigned_orders:', assignedUpdateError)
       // Don't fail the whole operation if this fails
     } else {
       console.log(`[Rider Webhooks] ✅ Updated assignment store with status ${mapping.assignmentStatus}`)
+      // Note: If status is 'picked_up', IX sync happens automatically via upsertAssignedOrderWithSync
     }
 
-    // 4. Update source system (IronXpress) status only if mapping specifies one
-    if (mapping.sourceStatus) {
+    // 4. CRITICAL FIX: Mirror picked_up status to IronXpress as 'reached'
+    if (status === 'picked_up') {
+      console.log(`[Rider Webhooks] 🔄 SYNCING picked_up -> reached for order ${orderId}`)
+      try {
+        const ironxpressBase = process.env.IRONXPRESS_BASE_URL?.replace(/\/$/, '') || ''
+        if (ironxpressBase && INTERNAL_API_SECRET) {
+          const syncResponse = await fetch(`${ironxpressBase}/api/admin/orders`, {
+            method: 'PATCH',
+            headers: {
+              'x-shared-secret': INTERNAL_API_SECRET,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              orderId: orderId,
+              status: 'reached'
+            })
+          })
+          
+          if (syncResponse.ok) {
+            console.log(`[Rider Webhooks] ✅ SUCCESS: Synced ${orderId} picked_up -> IX reached`)
+          } else {
+            const errorText = await syncResponse.text().catch(() => 'Unknown error')
+            console.error(`[Rider Webhooks] ❌ FAILED sync to IX: ${syncResponse.status} ${errorText}`)
+          }
+        } else {
+          console.warn('[Rider Webhooks] ❌ Cannot sync to IX - missing IRONXPRESS_BASE_URL or INTERNAL_API_SECRET')
+        }
+      } catch (syncError) {
+        console.error('[Rider Webhooks] ❌ Exception syncing picked_up to IX:', syncError)
+      }
+    }
+
+    // 5. Update other source system statuses if mapping specifies them
+    if (mapping.sourceStatus && status !== 'picked_up') {
       const sourceStatusUpdated = await updateSourceSystemStatus(orderId, mapping.sourceStatus, status)
       
       if (!sourceStatusUpdated) {
         console.warn('[Rider Webhooks] ⚠️ Failed to update source system status')
         // Continue anyway - platform updates succeeded
       }
-    } else {
-      console.log('[Rider Webhooks] ℹ️ No source status update required for', status)
     }
-
-    // 5. No special auto-transitions - IX admin must handle explicitly
 
     console.log(`[Rider Webhooks] ✅ Successfully processed ${status} for order ${orderId}`)
     

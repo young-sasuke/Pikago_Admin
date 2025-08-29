@@ -1,6 +1,7 @@
 // app/api/assign/route.ts (Pikago)
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { autoSyncPickedUpStatus } from '@/lib/ironxpress-mirror'
 import crypto from 'crypto'
 
 export const runtime = 'nodejs'

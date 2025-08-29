@@ -252,11 +252,12 @@ export default function AssignmentsPage() {
 
   const updateRiderStatus = async (orderId: string, status: string) => {
     try {
+      console.log(`[Admin] 🚀 Updating rider status: ${orderId} -> ${status}`)
       const response = await fetch('/api/rider-status', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer 918273645'
+          'x-shared-secret': '918273645'
         },
         body: JSON.stringify({ orderId, status }),
       })
