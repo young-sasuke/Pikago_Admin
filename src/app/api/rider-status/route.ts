@@ -50,6 +50,20 @@ const STATUS_MAPPING = {
     sourceStatus: 'reached', // IX UI gates on this status for Received button
     customerNotification: null
   },
+  // Delivery leg started (rider leaves store)
+  'shipped': {
+    platformStatus: 'out_for_delivery',
+    assignmentStatus: 'out_for_delivery',
+    sourceStatus: 'shipped',
+    customerNotification: 'Out for delivery'
+  },
+  // Alias for shipped
+  'out_for_delivery': {
+    platformStatus: 'out_for_delivery',
+    assignmentStatus: 'out_for_delivery',
+    sourceStatus: 'shipped',
+    customerNotification: 'Out for delivery'
+  },
   // Delivery completed (UI compatibility)
   'delivered': {
     platformStatus: 'delivered',

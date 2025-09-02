@@ -35,11 +35,6 @@ const navigation = [
   },
 
   {
-    name: 'Assignments',
-    href: '/admin/assignments',
-    icon: Truck,
-  },
-  {
     name: 'Riders',
     href: '/admin/riders',
     icon: UserCheck,
