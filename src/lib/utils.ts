@@ -1,3 +1,5 @@
+// src/lib/utils.ts
+
 import { type ClassValue, clsx } from "clsx"
 import { twMerge } from "tailwind-merge"
 
@@ -37,7 +39,7 @@ export function formatTime(timeString: string): string {
   try {
     let date: Date
     if (timeString.includes('T')) {
-      date = new Date(timeString)              // ISO string
+      date = new Date(timeString)
     } else if (timeString.includes(':')) {
       const [hours, minutes] = timeString.split(':')
       date = new Date()
@@ -51,32 +53,37 @@ export function formatTime(timeString: string): string {
   }
 }
 
-/* ---------- null/undefined safe lowercasing helper ---------- */
+/* ---------- helpers ---------- */
 const lower = (s?: string | null) => (typeof s === 'string' ? s.toLowerCase() : '')
 
+/* 
+ * HIGH-CONTRAST BADGES (solid bg + white text)
+ * IronXpress look & readability on light backgrounds
+ */
 export function getStatusColor(status?: string | null): string {
-  const statusColors: Record<string, string> = {
-    // Order statuses
-    'confirmed': 'bg-blue-100 text-blue-800',
-    'assigned': 'bg-yellow-100 text-yellow-800',
-    'picked_up': 'bg-purple-100 text-purple-800',
-    'in_transit': 'bg-orange-100 text-orange-800',
-    'out_for_delivery': 'bg-orange-100 text-orange-800',
-    'delivered_to_store': 'bg-blue-100 text-blue-800',
-    'ready_to_dispatch': 'bg-orange-100 text-orange-800',
-    'ready_for_delivery': 'bg-orange-100 text-orange-800',
-    'reached': 'bg-indigo-100 text-indigo-800',
-    'delivered': 'bg-green-100 text-green-800',
-    'cancelled': 'bg-red-100 text-red-800',
-    'failed': 'bg-red-100 text-red-800',
+  const m: Record<string, string> = {
+    // order lifecycle
+    'accepted':            'bg-blue-600 text-white',
+    'confirmed':           'bg-blue-600 text-white',
+    'assigned':            'bg-amber-600 text-white',
+    'picked_up':           'bg-violet-600 text-white',
+    'in_transit':          'bg-orange-600 text-white',
+    'out_for_delivery':    'bg-orange-600 text-white',
+    'delivered_to_store':  'bg-sky-600 text-white',
+    'ready_to_dispatch':   'bg-orange-700 text-white',
+    'ready_for_delivery':  'bg-orange-700 text-white',
+    'reached':             'bg-indigo-600 text-white',
+    'delivered':           'bg-green-600 text-white',
+    'completed':           'bg-emerald-600 text-white',
+    'cancelled':           'bg-red-600 text-white',
+    'failed':              'bg-red-600 text-white',
 
-    // Payment statuses
-    'paid': 'bg-green-100 text-green-800',
-    'pending': 'bg-yellow-100 text-yellow-800',
-    'refunded': 'bg-gray-100 text-gray-800',
-    // note: 'failed' already covered above
+    // payment
+    'paid':                'bg-green-600 text-white',
+    'pending':             'bg-amber-600 text-white',
+    'refunded':            'bg-gray-600 text-white',
   }
-  return statusColors[lower(status)] || 'bg-gray-100 text-gray-800'
+  return m[lower(status)] || 'bg-gray-700 text-white'
 }
 
 export function getStatusIcon(status?: string | null): string {
@@ -100,12 +107,12 @@ export function getStatusIcon(status?: string | null): string {
 
 export function getPriorityColor(priority?: string | null): string {
   const priorityColors: Record<string, string> = {
-    'low': 'bg-gray-100 text-gray-800',
-    'medium': 'bg-blue-100 text-blue-800',
-    'high': 'bg-orange-100 text-orange-800',
-    'urgent': 'bg-red-100 text-red-800',
+    'low': 'bg-gray-600 text-white',
+    'medium': 'bg-blue-600 text-white',
+    'high': 'bg-orange-600 text-white',
+    'urgent': 'bg-red-600 text-white',
   }
-  return priorityColors[lower(priority)] || 'bg-gray-100 text-gray-800'
+  return priorityColors[lower(priority)] || 'bg-gray-700 text-white'
 }
 
 export function getVehicleIcon(vehicleType?: string | null): string {
@@ -128,7 +135,7 @@ export function generateOrderSummary(order: any): string {
 }
 
 export function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371 // km
+  const R = 6371
   const dLat = (lat2 - lat1) * Math.PI / 180
   const dLon = (lon2 - lon1) * Math.PI / 180
   const a =
@@ -139,10 +146,7 @@ export function calculateDistance(lat1: number, lon1: number, lat2: number, lon2
   return R * c
 }
 
-export function debounce<T extends (...args: any[]) => void>(
-  func: T,
-  waitFor: number
-): (...args: Parameters<T>) => void {
+export function debounce<T extends (...args: any[]) => void>(func: T, waitFor: number) {
   let timeout: ReturnType<typeof setTimeout>
   return (...args: Parameters<T>): void => {
     clearTimeout(timeout)

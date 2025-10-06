@@ -41,7 +41,7 @@ const DISPATCH_READY_ALIASES = ['ready_to_dispatch', 'ready_for_delivery'] as co
 /* Types                                                              */
 /* ------------------------------------------------------------------ */
 type UserRow = {
-  id: string // users.id
+  id: string
   full_name: string
   phone: string | null
   email: string | null
@@ -72,7 +72,6 @@ interface PikagoOrder {
   delivery_address: string | null
   created_at: string
   updated_at: string
-  // NEW: carry address sent from IX / stored in PG
   store_address_id?: string | null
   store_address?: any | null
   metadata?: any | null
@@ -151,7 +150,6 @@ function useOrdersDirect() {
     return () => {
       void channel.unsubscribe()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function fetchOrders() {
@@ -161,19 +159,50 @@ function useOrdersDirect() {
         .select('*')
         .order('created_at', { ascending: false })
 
-      if (error) {
-        console.error('Error fetching orders:', error)
-        toast.error('Failed to fetch orders')
-        return
-      }
+    if (error) {
+      console.error('Error fetching orders:', error)
+      toast.error('Failed to fetch orders')
+      return
+    }
 
-      const mapped = (data ?? []).map(
-        (o: any): PikagoOrder => ({
+    const mapped = (data ?? []).map(
+      (o: any): PikagoOrder => {
+        // metadata fallbacks (IX payloads)
+        const meta = o?.metadata || {}
+        const cust = meta.customer || meta.customer_details || {}
+        const metaName =
+          cust.full_name || cust.name || meta.customer_name || meta.name || null
+        const metaPhone =
+          cust.phone ||
+          cust.phone_number ||
+          meta.customer_phone ||
+          meta.phone ||
+          null
+
+        // delivery address may be string/obj
+        const metaAddrObj =
+          meta.delivery_address ||
+          meta.address ||
+          (typeof o.address === 'object' ? o.address : null)
+
+        const metaAddrStr = metaAddrObj
+          ? [
+              metaAddrObj.address_line_1 || metaAddrObj.line1,
+              metaAddrObj.address_line_2 || metaAddrObj.line2,
+              metaAddrObj.city,
+              metaAddrObj.state,
+              metaAddrObj.pincode || metaAddrObj.zip,
+            ]
+              .filter(Boolean)
+              .join(', ')
+          : null
+
+        return {
           id: String(o.id),
           source_order_id: String(o.id),
-          full_name: o.full_name ?? o.customer_name ?? null,
-          email: o.email ?? null,
-          phone: o.phone ?? o.customer_phone ?? null,
+          full_name: o.full_name ?? o.customer_name ?? metaName ?? null,
+          email: o.email ?? cust.email ?? meta.email ?? null,
+          phone: o.phone ?? o.customer_phone ?? metaPhone ?? null,
           items: Array.isArray(o.items) ? o.items : [],
           total_amount: Number(o.total_amount ?? 0),
           payment_status: o.payment_status ?? 'pending',
@@ -181,25 +210,31 @@ function useOrdersDirect() {
           pickup_date: o.pickup_date ?? null,
           delivery_date: o.delivery_date ?? null,
           delivery_type: o.delivery_type ?? null,
-          delivery_address: o.delivery_address ?? o.address ?? null,
+          delivery_address:
+            (typeof o.delivery_address === 'string' ? o.delivery_address : null) ??
+            (typeof o.address === 'string' ? o.address : null) ??
+            metaAddrStr ??
+            null,
           created_at: o.created_at ?? new Date().toISOString(),
           updated_at: o.updated_at ?? o.created_at ?? new Date().toISOString(),
-          // bring through address coming from IX or stored in PG
           store_address_id:
             o.store_address_id ??
             o.pickup_store_address_id ??
-            o?.metadata?.store_address_id ??
+            meta.store_address_id ??
+            meta.pickup_store_address_id ??
             null,
           store_address:
             o.store_address ??
             o.pickup_store_address ??
-            o?.metadata?.store_address ??
+            meta.store_address ??
+            meta.pickup_store_address ??
             null,
           metadata: o.metadata ?? null,
-        })
-      )
+        }
+      }
+    )
 
-      setOrders(mapped)
+    setOrders(mapped)
     } catch (err) {
       console.error('Error fetching orders:', err)
       toast.error('Failed to fetch orders')
@@ -238,10 +273,8 @@ function useUsers() {
     }
   }
 
-  // keep return name 'riders' so the modal props don’t change
   return { riders: rows, loading }
 }
-
 
 /* ------------------- */
 /* Order Details modal */
@@ -407,10 +440,10 @@ function OrderDetailsModal({
 /* ----------------- */
 export default function OrdersPage() {
   const { orders, loading, refetch } = useOrdersDirect()
-  const { riders } = useUsers() // <-- now reading from users table
+  const { riders } = useUsers()
 
   const [searchTerm, setSearchTerm] = useState('')
-  const [statusFilter, setStatusFilter] = useState<string>('all') // default view
+  const [statusFilter, setStatusFilter] = useState<string>('all')
   const [assignModalOpen, setAssignModalOpen] = useState(false)
   const [detailsModalOpen, setDetailsModalOpen] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<PikagoOrder | null>(null)
@@ -438,7 +471,6 @@ export default function OrdersPage() {
 
   useEffect(() => {
     refreshCounts()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Subscribe to assignment updates and refresh orders & counts
@@ -451,7 +483,6 @@ export default function OrdersPage() {
     return () => {
       supabase.removeChannel(ch as any)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const updateRiderStatus = async (orderId: string, status: string) => {
@@ -508,7 +539,6 @@ export default function OrdersPage() {
     return () => {
       void ch.unsubscribe()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const filteredOrders = orders.filter((order) => {
@@ -541,11 +571,11 @@ export default function OrdersPage() {
 
   const statusOptions = [
     { value: 'all', label: 'All Orders' },
-    { value: 'accepted', label: 'Accepted' }, // shows accepted + confirmed
+    { value: 'accepted', label: 'Accepted' },
     { value: 'assigned', label: 'Assigned' },
     { value: 'picked_up', label: 'Picked Up' },
     { value: 'delivered_to_store', label: 'Delivered to Store' },
-    { value: 'ready_to_dispatch', label: 'Ready to Dispatch' }, // new status for delivery assignment
+    { value: 'ready_to_dispatch', label: 'Ready to Dispatch' },
     { value: 'out_for_delivery', label: 'Out for Delivery' },
     { value: 'delivered', label: 'Delivered to Customer' },
     { value: 'completed', label: 'Completed' },
