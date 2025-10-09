@@ -94,6 +94,15 @@ interface Assignment {
   email?: string
 }
 
+/* Small local helper: render in IST without touching global utils */
+function dtIST(input: string | number | Date) {
+  try {
+    return new Date(input).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+  } catch {
+    return formatDateTime(String(input))
+  }
+}
+
 /* --------------------------------------------- */
 /* Hook: fetch ALL orders (filter client-side)   */
 /* --------------------------------------------- */
@@ -159,82 +168,82 @@ function useOrdersDirect() {
         .select('*')
         .order('created_at', { ascending: false })
 
-    if (error) {
-      console.error('Error fetching orders:', error)
-      toast.error('Failed to fetch orders')
-      return
-    }
+      if (error) {
+        console.error('Error fetching orders:', error)
+        toast.error('Failed to fetch orders')
+        return
+      }
 
-    const mapped = (data ?? []).map(
-      (o: any): PikagoOrder => {
-        // metadata fallbacks (IX payloads)
-        const meta = o?.metadata || {}
-        const cust = meta.customer || meta.customer_details || {}
-        const metaName =
-          cust.full_name || cust.name || meta.customer_name || meta.name || null
-        const metaPhone =
-          cust.phone ||
-          cust.phone_number ||
-          meta.customer_phone ||
-          meta.phone ||
-          null
+      const mapped = (data ?? []).map(
+        (o: any): PikagoOrder => {
+          // metadata fallbacks (IX payloads)
+          const meta = o?.metadata || {}
+          const cust = meta.customer || meta.customer_details || {}
+          const metaName =
+            cust.full_name || cust.name || meta.customer_name || meta.name || null
+          const metaPhone =
+            cust.phone ||
+            cust.phone_number ||
+            meta.customer_phone ||
+            meta.phone ||
+            null
 
-        // delivery address may be string/obj
-        const metaAddrObj =
-          meta.delivery_address ||
-          meta.address ||
-          (typeof o.address === 'object' ? o.address : null)
+          // delivery address may be string/obj
+          const metaAddrObj =
+            meta.delivery_address ||
+            meta.address ||
+            (typeof o.address === 'object' ? o.address : null)
 
-        const metaAddrStr = metaAddrObj
-          ? [
-              metaAddrObj.address_line_1 || metaAddrObj.line1,
-              metaAddrObj.address_line_2 || metaAddrObj.line2,
-              metaAddrObj.city,
-              metaAddrObj.state,
-              metaAddrObj.pincode || metaAddrObj.zip,
-            ]
+          const metaAddrStr = metaAddrObj
+            ? [
+                metaAddrObj.address_line_1 || metaAddrObj.line1,
+                metaAddrObj.address_line_2 || metaAddrObj.line2,
+                metaAddrObj.city,
+                metaAddrObj.state,
+                metaAddrObj.pincode || metaAddrObj.zip,
+              ]
               .filter(Boolean)
               .join(', ')
-          : null
+            : null
 
-        return {
-          id: String(o.id),
-          source_order_id: String(o.id),
-          full_name: o.full_name ?? o.customer_name ?? metaName ?? null,
-          email: o.email ?? cust.email ?? meta.email ?? null,
-          phone: o.phone ?? o.customer_phone ?? metaPhone ?? null,
-          items: Array.isArray(o.items) ? o.items : [],
-          total_amount: Number(o.total_amount ?? 0),
-          payment_status: o.payment_status ?? 'pending',
-          order_status: o.order_status ?? 'accepted',
-          pickup_date: o.pickup_date ?? null,
-          delivery_date: o.delivery_date ?? null,
-          delivery_type: o.delivery_type ?? null,
-          delivery_address:
-            (typeof o.delivery_address === 'string' ? o.delivery_address : null) ??
-            (typeof o.address === 'string' ? o.address : null) ??
-            metaAddrStr ??
-            null,
-          created_at: o.created_at ?? new Date().toISOString(),
-          updated_at: o.updated_at ?? o.created_at ?? new Date().toISOString(),
-          store_address_id:
-            o.store_address_id ??
-            o.pickup_store_address_id ??
-            meta.store_address_id ??
-            meta.pickup_store_address_id ??
-            null,
-          store_address:
-            o.store_address ??
-            o.pickup_store_address ??
-            meta.store_address ??
-            meta.pickup_store_address ??
-            null,
-          metadata: o.metadata ?? null,
+          return {
+            id: String(o.id),
+            source_order_id: String(o.id),
+            full_name: o.full_name ?? o.customer_name ?? metaName ?? null,
+            email: o.email ?? cust.email ?? meta.email ?? null,
+            phone: o.phone ?? o.customer_phone ?? metaPhone ?? null,
+            items: Array.isArray(o.items) ? o.items : [],
+            total_amount: Number(o.total_amount ?? 0),
+            payment_status: o.payment_status ?? 'pending',
+            order_status: o.order_status ?? 'accepted',
+            pickup_date: o.pickup_date ?? null,
+            delivery_date: o.delivery_date ?? null,
+            delivery_type: o.delivery_type ?? null,
+            delivery_address:
+              (typeof o.delivery_address === 'string' ? o.delivery_address : null) ??
+              (typeof o.address === 'string' ? o.address : null) ??
+              metaAddrStr ??
+              null,
+            created_at: o.created_at ?? new Date().toISOString(),
+            updated_at: o.updated_at ?? o.created_at ?? new Date().toISOString(),
+            store_address_id:
+              o.store_address_id ??
+              o.pickup_store_address_id ??
+              meta.store_address_id ??
+              meta.pickup_store_address_id ??
+              null,
+            store_address:
+              o.store_address ??
+              o.pickup_store_address ??
+              meta.store_address ??
+              meta.pickup_store_address ??
+              null,
+            metadata: o.metadata ?? null,
+          }
         }
-      }
-    )
+      )
 
-    setOrders(mapped)
+      setOrders(mapped)
     } catch (err) {
       console.error('Error fetching orders:', err)
       toast.error('Failed to fetch orders')
@@ -295,11 +304,13 @@ function OrderDetailsModal({
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
+            {/* FULL ID visible */}
             <h3 className="text-lg font-semibold text-gray-900">
-              #{order.id.slice(0, 8)}
+              #{order.id}
             </h3>
             <p className="text-sm text-gray-500">
-              Created {formatDateTime(order.created_at)}
+              {/* created_at shown in IST for consistency */}
+              Created {dtIST(order.created_at)}
             </p>
           </div>
           <span
@@ -425,7 +436,8 @@ function OrderDetailsModal({
           <h4 className="font-medium text-gray-900 mb-2">Source Information</h4>
           <div className="text-sm">
             <span className="text-gray-600">IronXpress Order ID:</span>
-            <span className="ml-2 font-mono text-blue-600">
+            {/* FULL source id visible */}
+            <span className="ml-2 font-mono text-blue-600 break-all">
               {order.source_order_id}
             </span>
           </div>
@@ -719,12 +731,13 @@ export default function OrdersPage() {
                           <div className="text-lg">
                             {getStatusIcon(order.order_status)}
                           </div>
-                          <div>
-                            <p className="text-sm font-medium text-gray-900">
-                              #{order.id.slice(0, 8)}
+                          <div className="min-w-[220px]">
+                            {/* FULL IDs visible, with wrapping */}
+                            <p className="text-sm font-medium text-gray-900 break-all">
+                              #{order.id}
                             </p>
-                            <p className="text-xs text-gray-500 font-mono">
-                              IronXpress: {order.source_order_id.slice(0, 8)}
+                            <p className="text-xs text-gray-500 font-mono break-all">
+                              IronXpress: {order.source_order_id}
                             </p>
                           </div>
                         </div>
@@ -770,8 +783,9 @@ export default function OrdersPage() {
                           {order.order_status}
                         </span>
                       </td>
+                      {/* Created time in IST */}
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {formatDateTime(order.created_at)}
+                        {dtIST(order.created_at)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         <div className="flex items-center gap-2 justify-end">

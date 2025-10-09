@@ -1,7 +1,7 @@
 "use client"
 
 import { Modal } from '@/components/ui/Modal'
-import { formatCurrency, getStatusColor, getStatusIcon, formatDateTime, formatDate } from '@/lib/utils'
+import { formatCurrency, getStatusColor, getStatusIcon } from '@/lib/utils'
 import { User, Phone, MapPin, IndianRupee } from 'lucide-react'
 
 export type Assignment = {
@@ -20,6 +20,18 @@ export type Assignment = {
   email?: string
 }
 
+/* Local IST display (don’t touch global utils) */
+function dtIST(input: string | number | Date) {
+  try {
+    return new Date(input).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+  } catch {
+    return String(input)
+  }
+}
+function dIST(input: string | null) {
+  return input ? new Date(input).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }) : 'N/A'
+}
+
 export default function AssignmentDetailsModal({
   isOpen,
   onClose,
@@ -36,8 +48,9 @@ export default function AssignmentDetailsModal({
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900">#{assignment.id?.slice(0, 8) || 'N/A'}</h3>
-            <p className="text-sm text-gray-500">Assigned {formatDateTime(assignment.created_at)}</p>
+            {/* FULL id visible */}
+            <h3 className="text-lg font-semibold text-gray-900">#{assignment.id || 'N/A'}</h3>
+            <p className="text-sm text-gray-500">Assigned {dtIST(assignment.created_at)}</p>
           </div>
           <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(assignment.status)}`}>
             {getStatusIcon(assignment.status)} {assignment.status}
@@ -56,7 +69,8 @@ export default function AssignmentDetailsModal({
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">User ID:</span>
-                <span className="font-medium font-mono">{assignment.user_id?.slice(0, 8) || 'N/A'}</span>
+                {/* FULL user id but with wrapping */}
+                <span className="font-medium font-mono break-all">{assignment.user_id || 'N/A'}</span>
               </div>
             </div>
           </div>
@@ -68,15 +82,15 @@ export default function AssignmentDetailsModal({
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-gray-600">Name:</span>
-                <span className="font-medium">{assignment.full_name || 'N/A'}</span>
+                <span className="font-medium break-all">{assignment.full_name || 'N/A'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">Phone:</span>
-                <span className="font-medium">{assignment.phone || 'N/A'}</span>
+                <span className="font-medium break-all">{assignment.phone || 'N/A'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">Email:</span>
-                <span className="font-medium">{assignment.email || 'N/A'}</span>
+                <span className="font-medium break-all">{assignment.email || 'N/A'}</span>
               </div>
             </div>
           </div>
@@ -89,16 +103,16 @@ export default function AssignmentDetailsModal({
           <div className="space-y-2 text-sm">
             <div>
               <span className="text-gray-600">Address:</span>
-              <p className="mt-1 text-gray-900">{assignment.delivery_address || 'N/A'}</p>
+              <p className="mt-1 text-gray-900 break-all">{assignment.delivery_address || 'N/A'}</p>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <span className="text-gray-600">Pickup Date:</span>
-                <p className="font-medium">{assignment.pickup_date ? formatDate(assignment.pickup_date) : 'N/A'}</p>
+                <p className="font-medium">{dIST(assignment.pickup_date)}</p>
               </div>
               <div>
                 <span className="text-gray-600">Delivery Date:</span>
-                <p className="font-medium">{assignment.delivery_date ? formatDate(assignment.delivery_date) : 'N/A'}</p>
+                <p className="font-medium">{dIST(assignment.delivery_date)}</p>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
@@ -108,7 +122,7 @@ export default function AssignmentDetailsModal({
               </div>
               <div>
                 <span className="text-gray-600">Last Updated:</span>
-                <p className="font-medium">{formatDateTime(assignment.updated_at)}</p>
+                <p className="font-medium">{dtIST(assignment.updated_at)}</p>
               </div>
             </div>
           </div>

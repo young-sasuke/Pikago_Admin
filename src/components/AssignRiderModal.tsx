@@ -54,15 +54,12 @@ export default function AssignRiderModal({
   const incomingAddressIdRaw =
     (order as any)?.store_address_id ??
     (order as any)?.metadata?.store_address_id ??
-    (order as any)?.pickup_store_address_id ??
-    ''
-
+    (order as any)?.pickup_store_address_id ?? ''
   const incomingAddressId = incomingAddressIdRaw ? String(incomingAddressIdRaw) : ''
   const incomingAddressObj: any =
     (order as any)?.store_address ??
     (order as any)?.metadata?.store_address ??
-    (order as any)?.pickup_store_address ??
-    null
+    (order as any)?.pickup_store_address ?? null
 
   useEffect(() => {
     if (!isOpen) return
@@ -80,7 +77,7 @@ export default function AssignRiderModal({
       if (data?.ok) {
         const list = (data.data ?? []) as any[]
         setStoreAddresses(list)
-        // If nothing came from IX, choose a sensible default
+        // sensible default if IX did not send anything
         if (!incomingAddressId && !incomingAddressObj?.id) {
           const def = list.find((x) => x.is_default)
           const autoId = def?.id || list[0]?.id || ''
@@ -132,20 +129,14 @@ export default function AssignRiderModal({
     (incomingAddressId &&
       storeAddresses.find((s) => String(s.id) === String(incomingAddressId))) ||
     null
-
   const resolvedBySelectedId =
     (selectedAddressId &&
       storeAddresses.find((s) => String(s.id) === String(selectedAddressId))) ||
     null
-
   const defaultStore = storeAddresses.find((s) => s.is_default) || storeAddresses[0] || null
 
   const activeAddressObj =
-    incomingAddressObj ||
-    resolvedByIncomingId ||
-    resolvedBySelectedId ||
-    defaultStore ||
-    null
+    incomingAddressObj || resolvedByIncomingId || resolvedBySelectedId || defaultStore || null
 
   async function handleAssignInternal() {
     if (!selectedRiderId || !order) return
@@ -261,7 +252,8 @@ export default function AssignRiderModal({
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
               <div className="text-slate-700">
                 <span className="text-slate-600">Order ID:</span>
-                <span className="ml-2 font-semibold text-slate-900">#{order.id.slice(0, 8)}</span>
+                {/* FULL order id */}
+                <span className="ml-2 font-semibold text-slate-900 break-all">#{order.id}</span>
               </div>
               <div className="text-slate-700">
                 <span className="text-slate-600">Amount:</span>
