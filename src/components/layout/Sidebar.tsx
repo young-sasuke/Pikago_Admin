@@ -10,45 +10,17 @@ import {
   UserCheck,
   Settings,
   Bell,
-  LogOut,
   Truck,
   Database,
 } from 'lucide-react'
-import { useAuth } from '@/hooks/useAuth'
-import { Button } from '@/components/ui/Button'
 
 const navigation = [
-  {
-    name: 'Dashboard',
-    href: '/admin',
-    icon: Home,
-  },
-  {
-    name: 'Orders',
-    href: '/admin/orders',
-    icon: Package,
-  },
-  {
-  name: 'Store Address',
-  href: '/admin/stores',
-  icon: Database,
-  },
-
-  {
-    name: 'Riders',
-    href: '/admin/riders',
-    icon: UserCheck,
-  },
-  {
-    name: 'Notifications',
-    href: '/admin/notifications',
-    icon: Bell,
-  },
-  {
-    name: 'Settings',
-    href: '/admin/settings',
-    icon: Settings,
-  },
+  { name: 'Dashboard', href: '/admin', icon: Home },
+  { name: 'Orders', href: '/admin/orders', icon: Package },
+  { name: 'Store Address', href: '/admin/stores', icon: Database },
+  { name: 'Riders', href: '/admin/riders', icon: UserCheck },
+  { name: 'Notifications', href: '/admin/notifications', icon: Bell },
+  { name: 'Settings', href: '/admin/settings', icon: Settings },
 ]
 
 interface SidebarProps {
@@ -58,7 +30,6 @@ interface SidebarProps {
 
 export function Sidebar({ isCollapsed = false }: SidebarProps) {
   const pathname = usePathname()
-  const { admin, signOut } = useAuth()
 
   return (
     <div
@@ -82,16 +53,16 @@ export function Sidebar({ isCollapsed = false }: SidebarProps) {
         </div>
       </div>
 
-      {/* Admin Info */}
-      {!isCollapsed && admin && (
+      {/* (Static) Admin Info — optional */}
+      {!isCollapsed && (
         <div className="border-b border-gray-700 p-4">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-600">
               <Users className="h-5 w-5" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{admin.full_name}</p>
-              <p className="truncate text-xs text-gray-400">{admin.role}</p>
+              <p className="truncate text-sm font-medium">Admin</p>
+              <p className="truncate text-xs text-gray-400">super_admin</p>
             </div>
           </div>
         </div>
@@ -100,8 +71,10 @@ export function Sidebar({ isCollapsed = false }: SidebarProps) {
       {/* Navigation */}
       <nav className="flex-1 space-y-1 p-4">
         {navigation.map((item) => {
-          const isActive = pathname === item.href || (item.href !== '/admin' && pathname.startsWith(item.href))
-          
+          const isActive =
+            pathname === item.href ||
+            (item.href !== '/admin' && pathname.startsWith(item.href))
+
           return (
             <Link
               key={item.name}
@@ -121,21 +94,7 @@ export function Sidebar({ isCollapsed = false }: SidebarProps) {
         })}
       </nav>
 
-      {/* Sign Out */}
-      <div className="border-t border-gray-700 p-4">
-        <Button
-          variant="ghost"
-          onClick={signOut}
-          className={cn(
-            'w-full justify-start text-gray-300 hover:bg-gray-800 hover:text-white',
-            isCollapsed && 'justify-center'
-          )}
-          title={isCollapsed ? 'Sign Out' : undefined}
-        >
-          <LogOut className="h-5 w-5 flex-shrink-0" />
-          {!isCollapsed && <span className="ml-3">Sign Out</span>}
-        </Button>
-      </div>
+      {/* Sign Out removed in no-auth mode */}
     </div>
   )
 }

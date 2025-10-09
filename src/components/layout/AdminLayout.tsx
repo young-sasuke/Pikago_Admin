@@ -1,11 +1,8 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
 import { Sidebar } from './Sidebar'
 import { Header } from './Header'
-import { useAuth } from '@/hooks/useAuth'
-import { LoadingPage } from '@/components/ui/Loading'
 import { cn } from '@/lib/utils'
 
 interface AdminLayoutProps {
@@ -14,31 +11,21 @@ interface AdminLayoutProps {
   headerActions?: React.ReactNode
 }
 
-export function AdminLayout({ children, title = 'Dashboard', headerActions }: AdminLayoutProps) {
+export function AdminLayout({
+  children,
+  title = 'Dashboard',
+  headerActions,
+}: AdminLayoutProps) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [isMounted, setIsMounted] = useState(false)
-  const { user, admin, loading } = useAuth()
-  const router = useRouter()
 
   useEffect(() => {
     setIsMounted(true)
   }, [])
 
-  useEffect(() => {
-    if (!loading && !user) {
-      router.push('/admin/login')
-    } else if (!loading && user && !admin) {
-      // User is logged in but not an admin
-      router.push('/admin/login')
-    }
-  }, [user, admin, loading, router])
-
-  if (!isMounted || loading) {
-    return <LoadingPage />
-  }
-
-  if (!user || !admin) {
-    return <LoadingPage />
+  if (!isMounted) {
+    // Keep a tiny skeleton to avoid hydration mismatch
+    return <div className="min-h-screen bg-gray-50" />
   }
 
   return (
@@ -71,9 +58,7 @@ export function AdminLayout({ children, title = 'Dashboard', headerActions }: Ad
           {headerActions}
         </Header>
 
-        <main className="p-4 lg:p-6">
-          {children}
-        </main>
+        <main className="p-4 lg:p-6">{children}</main>
       </div>
     </div>
   )
