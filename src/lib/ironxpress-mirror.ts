@@ -1,4 +1,3 @@
-// lib/ironxpress-mirror.ts
 // Centralized utility for mirroring Pikago status updates to IronXpress
 
 import { supabaseAdmin } from './supabase-admin'
@@ -14,6 +13,33 @@ if (!IRON_BASE) {
 }
 if (!IRON_AUTH_SECRET) {
   console.warn('[IronXpress Mirror] INTERNAL_API_SECRET not configured - IX sync disabled')
+}
+
+/**
+ * Get current order status from IronXpress (for idempotent behavior)
+ * Returns null if failed or not found
+ */
+async function getCurrentIXStatus(orderId: string): Promise<string | null> {
+  try {
+    const response = await fetch(`${IRON_BASE}/api/admin/orders?limit=1000`, {
+      method: 'GET',
+      headers: {
+        'x-shared-secret': IRON_AUTH_SECRET,
+      },
+    })
+
+    if (!response.ok) {
+      return null
+    }
+
+    const data = await response.json()
+    const orders = data?.orders || []
+    const order = orders.find((o: any) => o.id === orderId)
+    
+    return order?.order_status || null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -81,33 +107,6 @@ export async function mirrorPickedUpToReached(orderId: string): Promise<boolean>
 }
 
 /**
- * Get current order status from IronXpress (for idempotent behavior)
- * Returns null if failed or not found
- */
-async function getCurrentIXStatus(orderId: string): Promise<string | null> {
-  try {
-    const response = await fetch(`${IRON_BASE}/api/admin/orders?limit=1000`, {
-      method: 'GET',
-      headers: {
-        'x-shared-secret': IRON_AUTH_SECRET,
-      },
-    })
-
-    if (!response.ok) {
-      return null
-    }
-
-    const data = await response.json()
-    const orders = data?.orders || []
-    const order = orders.find((o: any) => o.id === orderId)
-    
-    return order?.order_status || null
-  } catch {
-    return null
-  }
-}
-
-/**
  * Mirror any status change to IX (generic version)
  * @param orderId - Order ID
  * @param pgStatus - The new Pikago status
@@ -116,7 +115,7 @@ async function getCurrentIXStatus(orderId: string): Promise<string | null> {
 export async function mirrorStatusToIX(
   orderId: string, 
   pgStatus: string, 
-  ixStatusMap: Record<string, string> = { 'picked_up': 'reached' }
+  ixStatusMap: Record<string, string> = { 'picked_up': 'reached', 'shipped': 'shipped' }
 ): Promise<boolean> {
   const ixStatus = ixStatusMap[pgStatus]
   if (!ixStatus) {

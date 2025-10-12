@@ -111,7 +111,7 @@ function useOrdersDirect() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetchOrders()
+    void fetchOrders()
 
     const channel = supabase
       .channel('orders-any')
@@ -151,7 +151,7 @@ function useOrdersDirect() {
           }
 
           // Always refresh the table
-          fetchOrders()
+          void fetchOrders()
         }
       )
       .subscribe()
@@ -159,6 +159,7 @@ function useOrdersDirect() {
     return () => {
       void channel.unsubscribe()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function fetchOrders() {
@@ -227,16 +228,16 @@ function useOrdersDirect() {
             created_at: o.created_at ?? new Date().toISOString(),
             updated_at: o.updated_at ?? o.created_at ?? new Date().toISOString(),
             store_address_id:
-              o.store_address_id ??
-              o.pickup_store_address_id ??
-              meta.store_address_id ??
-              meta.pickup_store_address_id ??
+              o.store_address_id ?? 
+              o.pickup_store_address_id ?? 
+              (meta as any).store_address_id ?? 
+              (meta as any).pickup_store_address_id ?? 
               null,
             store_address:
-              o.store_address ??
-              o.pickup_store_address ??
-              meta.store_address ??
-              meta.pickup_store_address ??
+              o.store_address ?? 
+              o.pickup_store_address ?? 
+              (meta as any).store_address ?? 
+              (meta as any).pickup_store_address ?? 
               null,
             metadata: o.metadata ?? null,
           }
@@ -305,9 +306,7 @@ function OrderDetailsModal({
         <div className="flex items-center justify-between">
           <div>
             {/* FULL ID visible */}
-            <h3 className="text-lg font-semibold text-gray-900">
-              #{order.id}
-            </h3>
+            <h3 className="text-lg font-semibold text-gray-900">#{order.id}</h3>
             <p className="text-sm text-gray-500">
               {/* created_at shown in IST for consistency */}
               Created {dtIST(order.created_at)}
@@ -352,9 +351,7 @@ function OrderDetailsModal({
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-gray-600">Total Amount:</span>
-                <span className="font-medium">
-                  {formatCurrency(order.total_amount)}
-                </span>
+                <span className="font-medium">{formatCurrency(order.total_amount)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">Payment Status:</span>
@@ -378,9 +375,7 @@ function OrderDetailsModal({
           <div className="space-y-2 text-sm">
             <div>
               <span className="text-gray-600">Address:</span>
-              <p className="mt-1 text-gray-900">
-                {order.delivery_address || 'N/A'}
-              </p>
+              <p className="mt-1 text-gray-900">{order.delivery_address || 'N/A'}</p>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -415,16 +410,12 @@ function OrderDetailsModal({
             </h4>
             <div className="space-y-2 max-h-40 overflow-y-auto">
               {order.items.map((item: OrderItem, index: number) => (
-                <div
-                  key={index}
-                  className="flex justify-between items-center text-sm"
-                >
+                <div key={index} className="flex justify-between items-center text-sm">
                   <span className="text-gray-900">
                     {item.name || `Item ${index + 1}`}
                   </span>
                   <span className="text-gray-600">
-                    {item.quantity || 1}x{' '}
-                    {item.price ? formatCurrency(item.price) : 'N/A'}
+                    {item.quantity || 1}x {item.price ? formatCurrency(item.price) : 'N/A'}
                   </span>
                 </div>
               ))}
@@ -482,19 +473,20 @@ export default function OrdersPage() {
   }
 
   useEffect(() => {
-    refreshCounts()
+    void refreshCounts()
   }, [])
 
   // Subscribe to assignment updates and refresh orders & counts
   const { subscribeToAssignments } = useRealtime()
   useEffect(() => {
     const ch = subscribeToAssignments(() => {
-      refetch()
-      refreshCounts()
+      void refetch()
+      void refreshCounts()
     })
     return () => {
-      supabase.removeChannel(ch as any)
+      void ch.unsubscribe()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const updateRiderStatus = async (orderId: string, status: string) => {
@@ -544,7 +536,7 @@ export default function OrdersPage() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'orders' },
-        () => refreshCounts()
+        () => void refreshCounts()
       )
       .subscribe()
 
@@ -586,6 +578,8 @@ export default function OrdersPage() {
     { value: 'accepted', label: 'Accepted' },
     { value: 'assigned', label: 'Assigned' },
     { value: 'picked_up', label: 'Picked Up' },
+    { value: 'reached', label: 'Reached' },
+    { value: 'in_transit', label: 'In Transit' },
     { value: 'delivered_to_store', label: 'Delivered to Store' },
     { value: 'ready_to_dispatch', label: 'Ready to Dispatch' },
     { value: 'out_for_delivery', label: 'Out for Delivery' },
@@ -895,7 +889,9 @@ export default function OrdersPage() {
                             <Button
                               variant="default"
                               size="sm"
-                              onClick={() => updateRiderStatus(order.id, 'delivered_to_customer')}
+                              onClick={() =>
+                                updateRiderStatus(order.id, 'delivered_to_customer')
+                              }
                             >
                               <CheckCircle className="h-4 w-4 mr-1" />
                               Delivered

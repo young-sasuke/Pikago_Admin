@@ -1,5 +1,5 @@
-// app/api/rider-webhooks/shipped/route.ts (Pikago)
 import { NextRequest, NextResponse } from 'next/server'
+import { mirrorIXStatus } from '@/lib/ironxpress-mirror'
 
 export const runtime = 'nodejs'
 
@@ -25,6 +25,18 @@ export async function POST(req: NextRequest) {
     // Use request origin (no hardcoded domain)
     const origin = new URL(req.url).origin
 
+    // Sync order status to IronXpress
+    const ixStatus = 'shipped' // Status to send to IronXpress
+    const success = await mirrorIXStatus(orderId, ixStatus)
+
+    if (!success) {
+      return NextResponse.json(
+        { ok: false, error: 'Failed to sync with IronXpress' },
+        { status: 500 }
+      )
+    }
+
+    // Proxy request to the rider status API
     const response = await fetch(`${origin}/api/rider-status`, {
       method: 'POST',
       headers: {
