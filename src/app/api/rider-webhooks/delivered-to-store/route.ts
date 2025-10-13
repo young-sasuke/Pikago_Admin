@@ -1,29 +1,38 @@
-// app/api/rider-webhooks/delivered-to-store/route.ts (Pikago)
+// app/api/rider-webhooks/delivered-to-store/route.ts
 import { NextRequest, NextResponse } from 'next/server'
+
+export const runtime = 'nodejs'
 
 /**
  * Rider webhook: "Delivered to store" (end of pickup leg)
- * → mark platform order and assignment as delivered_to_store
- * → source system can remain "work_in_progress"
+ * -> PG updates only; IX status stays WIP here (no notification needed)
  */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}))
-    const { orderId, riderId, riderName } = body
+    const { orderId: rawOrderId, riderId, riderName } = body
 
-    if (!orderId) {
+    if (!rawOrderId) {
       return NextResponse.json(
         { ok: false, error: 'orderId is required' },
         { status: 400 }
       )
     }
 
-    // Forward to the main rider-status webhook with "delivered_to_store" status
-    const response = await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/rider-status`, {
+    const orderId = String(rawOrderId).replace(/^#/, '').trim()
+    const origin = new URL(req.url).origin
+
+    const secret =
+      process.env.ASSIGN_UPDATE_SECRET ||
+      process.env.IMPORT_SHARED_SECRET ||
+      process.env.INTERNAL_API_SECRET ||
+      ''
+
+    const res = await fetch(`${origin}/api/rider-status`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-shared-secret': process.env.ASSIGN_UPDATE_SECRET || process.env.IMPORT_SHARED_SECRET || '',
+        'x-shared-secret': secret,
       },
       body: JSON.stringify({
         orderId,
@@ -33,18 +42,14 @@ export async function POST(req: NextRequest) {
       }),
     })
 
-    const result = await response.json()
-    
-    if (!response.ok) {
-      return NextResponse.json(result, { status: response.status })
-    }
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok) return NextResponse.json(json, { status: res.status })
 
     return NextResponse.json({
       ok: true,
-      message: 'Order marked as delivered to store successfully',
-      ...result
+      message: 'Order marked delivered to store',
+      ...json,
     })
-
   } catch (e: any) {
     console.error('[Delivered to Store Webhook] Error:', e)
     return NextResponse.json(
