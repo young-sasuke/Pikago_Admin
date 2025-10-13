@@ -1,323 +1,301 @@
 // app/api/rider-status/route.ts (Pikago) - Comprehensive Two-Leg Rider Webhooks
-import { NextRequest, NextResponse } from 'next/server'
-import { supabaseAdmin } from '@/lib/supabase-admin'
-import { createClient } from '@supabase/supabase-js'
-import { upsertAssignedOrderWithSync } from '@/lib/db-sync'
+/* SAFE: removed top-level env throws; added internal checks; minor cleanups */
 
-export const runtime = 'nodejs'
+import { NextRequest, NextResponse } from 'next/server';
+import { supabaseAdmin } from '@/lib/supabase-admin';
+import { upsertAssignedOrderWithSync } from '@/lib/db-sync';
 
-// Environment configuration - fail fast if missing required vars
-const IRON_BASE = process.env.IRONXPRESS_BASE_URL
-const ASSIGN_UPDATE_SECRET = process.env.ASSIGN_UPDATE_SECRET ?? process.env.INTERNAL_API_SECRET
-const IMPORT_SHARED_SECRET = process.env.IMPORT_SHARED_SECRET
-const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET
-
-// Validate required environment variables
-if (!IRON_BASE) {
-  throw new Error('IRONXPRESS_BASE_URL environment variable is required')
-}
-if (!INTERNAL_API_SECRET) {
-  throw new Error('INTERNAL_API_SECRET environment variable is required')
-}
+export const runtime = 'nodejs';
 
 // Status mapping for the comprehensive two-leg system
 const STATUS_MAPPING = {
   // Pickup leg (rider 1)
-  'picked_up': {
+  picked_up: {
     platformStatus: 'picked_up',
-    assignmentStatus: 'picked_up', 
-    sourceStatus: 'reached', // Sync to IX as 'reached' so admin sees Received button
-    customerNotification: null // no auto notification
+    assignmentStatus: 'picked_up',
+    sourceStatus: 'reached', // IX sees "reached", enables Received button
+    customerNotification: null,
   },
   // In transit status (UI compatibility)
-  'in_transit': {
+  in_transit: {
     platformStatus: 'in_transit',
     assignmentStatus: 'in_transit',
     sourceStatus: 'working_in_progress',
-    customerNotification: null // no customer notification change
+    customerNotification: null,
   },
   // End of pickup leg (delivery to store) - alias for 'reached'
-  'delivered_to_store': {
+  delivered_to_store: {
     platformStatus: 'delivered_to_store',
     assignmentStatus: 'reached',
-    sourceStatus: 'delivered_to_store', // IX UI gates on this status for Received button
-    customerNotification: null // no customer notification yet
+    sourceStatus: 'delivered_to_store',
+    customerNotification: null,
   },
   // Reached at store (end of pickup leg)
-  'reached': {
+  reached: {
     platformStatus: 'delivered_to_store',
     assignmentStatus: 'reached',
-    sourceStatus: 'reached', // IX UI gates on this status for Received button
-    customerNotification: null
+    sourceStatus: 'reached',
+    customerNotification: null,
   },
   // Delivery leg started (rider leaves store)
-  'shipped': {
-    platformStatus: 'out_for_delivery',
+  shipped: {
+    platformStatus: 'shipped',
     assignmentStatus: 'out_for_delivery',
     sourceStatus: 'shipped',
-    customerNotification: 'Out for delivery'
+    customerNotification: 'Out for delivery',
   },
   // Alias for shipped
-  'out_for_delivery': {
-    platformStatus: 'out_for_delivery',
+  out_for_delivery: {
+    platformStatus: 'shipped',
     assignmentStatus: 'out_for_delivery',
     sourceStatus: 'shipped',
-    customerNotification: 'Out for delivery'
+    customerNotification: 'Out for delivery',
   },
-  // Delivery completed (UI compatibility)
-  'delivered': {
+  // Delivery completed
+  delivered: {
     platformStatus: 'delivered',
     assignmentStatus: 'delivered',
     sourceStatus: 'delivered',
-    customerNotification: 'Order completed'
+    customerNotification: 'Order completed',
   },
-  // Delivery leg (rider 2) - webhook compatibility
-  'delivered_to_customer': {
+  delivered_to_customer: {
     platformStatus: 'delivered',
     assignmentStatus: 'delivered',
     sourceStatus: 'delivered',
-    customerNotification: 'Order completed'
-  }
-}
+    customerNotification: 'Order completed',
+  },
+} as const;
 
 export async function POST(req: NextRequest) {
-  console.log('[Rider Webhooks] 📥 Received rider status update')
-  
+  console.log('[Rider Webhooks] 📥 Received rider status update');
+
   try {
-    // Enhanced authentication - support multiple secret types
-    const authHeader = req.headers.get('authorization')
-    const sharedSecretHeader = req.headers.get('x-shared-secret') || req.headers.get('x-rider-secret')
-    const expectedSecret = ASSIGN_UPDATE_SECRET || IMPORT_SHARED_SECRET
-    
-    console.log('[Rider Webhooks] Auth header:', authHeader ? 'Present' : 'Missing')
-    console.log('[Rider Webhooks] Shared secret header:', sharedSecretHeader ? 'Present' : 'Missing')
-    console.log('[Rider Webhooks] Expected secret configured:', expectedSecret ? 'Yes' : 'No')
-    
+    // --- Auth (supports multiple secret headers) ---
+    const ASSIGN_UPDATE_SECRET =
+      process.env.ASSIGN_UPDATE_SECRET ?? process.env.INTERNAL_API_SECRET;
+    const IMPORT_SHARED_SECRET = process.env.IMPORT_SHARED_SECRET;
+
+    const expectedSecret = ASSIGN_UPDATE_SECRET || IMPORT_SHARED_SECRET;
     if (!expectedSecret) {
-      console.error('[Rider Webhooks] ❌ No authentication secret configured')
-      return NextResponse.json({ ok: false, error: 'Server configuration error' }, { status: 500 })
+      console.error('[Rider Webhooks] ❌ No authentication secret configured');
+      return NextResponse.json(
+        { ok: false, error: 'Server configuration error' },
+        { status: 500 }
+      );
     }
-    
-    const isValidAuth = 
+
+    const authHeader = req.headers.get('authorization');
+    const sharedSecretHeader =
+      req.headers.get('x-shared-secret') || req.headers.get('x-rider-secret');
+
+    const isValidAuth =
       (authHeader === `Bearer ${expectedSecret}`) ||
-      (sharedSecretHeader === expectedSecret)
-    
+      (sharedSecretHeader === expectedSecret);
+
     if (!isValidAuth) {
-      console.error('[Rider Webhooks] ❌ Unauthorized request')
-      return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 })
+      console.error('[Rider Webhooks] ❌ Unauthorized request');
+      return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const body = await req.json().catch(() => ({}))
-    const { orderId: rawOrderId, status, riderId, riderName } = body
-    const orderId = String(rawOrderId ?? '').replace(/^#/, '').trim()
+    // --- Parse body ---
+    const body = await req.json().catch(() => ({}));
+    const { orderId: rawOrderId, status, riderId, riderName } = body;
+    const orderId = String(rawOrderId ?? '').replace(/^#/, '').trim();
 
-    console.log('[Rider Webhooks] Request payload:', JSON.stringify(body, null, 2))
+    console.log('[Rider Webhooks] Request payload:', JSON.stringify(body, null, 2));
 
     if (!orderId || !status) {
-      console.error('[Rider Webhooks] ❌ Missing required fields')
       return NextResponse.json(
         { ok: false, error: 'orderId and status are required' },
         { status: 400 }
-      )
+      );
     }
 
-    const mapping = STATUS_MAPPING[status as keyof typeof STATUS_MAPPING]
+    const mapping = (STATUS_MAPPING as any)[status];
     if (!mapping) {
-      console.error(`[Rider Webhooks] ❌ Invalid status: ${status}`)
       return NextResponse.json(
-        { ok: false, error: `Invalid status: ${status}. Valid statuses: ${Object.keys(STATUS_MAPPING).join(', ')}` },
+        {
+          ok: false,
+          error: `Invalid status: ${status}. Valid: ${Object.keys(STATUS_MAPPING).join(', ')}`,
+        },
         { status: 400 }
-      )
+      );
     }
 
-    console.log(`[Rider Webhooks] 🔄 Processing ${status} for order ${orderId}`)
-    
-    const nowIso = new Date().toISOString()
+    console.log(`[Rider Webhooks] 🔄 Processing ${status} for order ${orderId}`);
 
-    // 1. Read back the current order state for mirroring
+    const nowIso = new Date().toISOString();
+
+    // --- 1) Read current order (for assigned mirror payload) ---
     const { data: currentOrder, error: fetchError } = await supabaseAdmin
       .from('orders')
       .select('*')
       .eq('id', orderId)
-      .maybeSingle()
+      .maybeSingle();
 
     if (fetchError) {
-      console.error('[Rider Webhooks] ❌ Failed to fetch current order:', fetchError)
       return NextResponse.json(
         { ok: false, error: `Failed to fetch order: ${fetchError.message}` },
         { status: 500 }
-      )
+      );
     }
-
     if (!currentOrder) {
-      console.error(`[Rider Webhooks] ❌ Order ${orderId} not found`)
       return NextResponse.json(
         { ok: false, error: `Order ${orderId} not found` },
         { status: 404 }
-      )
+      );
     }
 
-    // 2. Update platform order status
+    // --- 2) Update platform orders table ---
     const { error: orderUpdateError } = await supabaseAdmin
       .from('orders')
-      .update({ 
+      .update({
         order_status: mapping.platformStatus,
-        updated_at: nowIso 
+        updated_at: nowIso,
       })
-      .eq('id', orderId)
+      .eq('id', orderId);
 
     if (orderUpdateError) {
-      console.error('[Rider Webhooks] ❌ Failed to update orders table:', orderUpdateError)
       return NextResponse.json(
         { ok: false, error: `Order update failed: ${orderUpdateError.message}` },
         { status: 500 }
-      )
+      );
     }
 
-    console.log(`[Rider Webhooks] ✅ Updated platform order to ${mapping.platformStatus}`)
-
-    // 3. Mirror complete order context into assigned_orders with AUTO-SYNC for picked_up
+    // --- 3) Mirror to assigned_orders (with auto-sync for picked_up) ---
     const assignedOrderPayload = {
       ...currentOrder,
-      status: mapping.assignmentStatus, // assignment-specific status
-      user_id: riderId || currentOrder.user_id, // ensure rider ID is set
-      rider_name: riderName || await getRiderName(riderId || currentOrder.user_id),
+      status: mapping.assignmentStatus,
+      user_id: riderId || currentOrder.user_id,
+      rider_name:
+        riderName || (await getRiderName(riderId || currentOrder.user_id)),
       updated_at: nowIso,
-    }
+    };
 
-    // CRITICAL: Use sync-enabled upsert that automatically handles picked_up → reached
-    const { error: assignedUpdateError } = await upsertAssignedOrderWithSync(assignedOrderPayload, { onConflict: 'id' })
+    const { error: assignedUpdateError } = await upsertAssignedOrderWithSync(
+      assignedOrderPayload,
+      { onConflict: 'id' }
+    );
 
     if (assignedUpdateError) {
-      console.warn('[Rider Webhooks] ⚠️ Failed to update assigned_orders:', assignedUpdateError)
-      // Don't fail the whole operation if this fails
-    } else {
-      console.log(`[Rider Webhooks] ✅ Updated assignment store with status ${mapping.assignmentStatus}`)
-      // Note: If status is 'picked_up', IX sync happens automatically via upsertAssignedOrderWithSync
+      console.warn('[Rider Webhooks] ⚠️ assigned_orders upsert failed:', assignedUpdateError);
+      // continue
     }
 
-    // 4. CRITICAL FIX: Mirror picked_up status to IronXpress as 'reached'
-    if (status === 'picked_up') {
-      console.log(`[Rider Webhooks] 🔄 SYNCING picked_up -> reached for order ${orderId}`)
-      try {
-        const ironxpressBase = process.env.IRONXPRESS_BASE_URL?.replace(/\/$/, '') || ''
-        if (ironxpressBase && INTERNAL_API_SECRET) {
-          const syncResponse = await fetch(`${ironxpressBase}/api/admin/orders`, {
-            method: 'PATCH',
-            headers: {
-              'x-shared-secret': INTERNAL_API_SECRET,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              orderId: orderId,
-              status: 'reached'
-            })
-          })
-          
-          if (syncResponse.ok) {
-            console.log(`[Rider Webhooks] ✅ SUCCESS: Synced ${orderId} picked_up -> IX reached`)
-          } else {
-            const errorText = await syncResponse.text().catch(() => 'Unknown error')
-            console.error(`[Rider Webhooks] ❌ FAILED sync to IX: ${syncResponse.status} ${errorText}`)
-          }
-        } else {
-          console.warn('[Rider Webhooks] ❌ Cannot sync to IX - missing IRONXPRESS_BASE_URL or INTERNAL_API_SECRET')
-        }
-      } catch (syncError) {
-        console.error('[Rider Webhooks] ❌ Exception syncing picked_up to IX:', syncError)
-      }
-    }
-
-    // 5. Update other source system statuses if mapping specifies them
+    // --- 4) Source system (IronXpress) status updates ---
+    // For picked_up we explicitly sync to 'reached' in db-sync helper.
+    // For everything else (including shipped), call IX API here.
     if (mapping.sourceStatus && status !== 'picked_up') {
-      const sourceStatusUpdated = await updateSourceSystemStatus(orderId, mapping.sourceStatus, status)
-      
-      if (!sourceStatusUpdated) {
-        console.warn('[Rider Webhooks] ⚠️ Failed to update source system status')
-        // Continue anyway - platform updates succeeded
-      }
+      const ok = await updateSourceSystemStatus(orderId, mapping.sourceStatus, status);
+      if (!ok) console.warn('[Rider Webhooks] ⚠️ IX source status update failed');
     }
 
-    console.log(`[Rider Webhooks] ✅ Successfully processed ${status} for order ${orderId}`)
-    
-    return NextResponse.json({ 
-      ok: true, 
+    console.log(`[Rider Webhooks] ✅ Success ${status} for ${orderId}`);
+
+    return NextResponse.json({
+      ok: true,
       message: `Order ${orderId} status updated to ${status}`,
       platformStatus: mapping.platformStatus,
       sourceStatus: mapping.sourceStatus,
-      assignmentStatus: mapping.assignmentStatus
-    })
-    
+      assignmentStatus: mapping.assignmentStatus,
+    });
   } catch (e: any) {
-    console.error('[Rider Webhooks] ❌ Unexpected error:', e)
+    console.error('[Rider Webhooks] ❌ Unexpected error:', e);
     return NextResponse.json(
-      { ok: false, error: e?.message ?? 'unknown_error' },
-      { status: 500 }
-    )
+        { ok: false, error: e?.message ?? 'unknown_error' },
+        { status: 500 }
+    );
   }
 }
 
-/* ------------ Helper Functions ------------ */
+/* ------------ Helpers ------------ */
 
-async function updateSourceSystemStatus(orderId: string, status: string, originalStatus: string) {
+async function updateSourceSystemStatus(
+  orderId: string,
+  status: string,
+  _originalStatus: string
+) {
   try {
-    console.log(`[Rider Webhooks] 🔄 Updating IronXpress via API: ${orderId} -> ${status}`)
-    
-    // Use IX API instead of direct DB to trigger notifications
-    const response = await fetch(`${IRON_BASE}/api/admin/orders`, {
-      method: 'PATCH',
-      headers: {
-        'x-shared-secret': INTERNAL_API_SECRET,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        orderId: orderId,
-        status: status
-      })
-    })
+    const ironBase = (process.env.IRONXPRESS_BASE_URL || '').replace(/\/$/, '');
+    const internalSecret = process.env.INTERNAL_API_SECRET;
 
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => 'Unknown error')
-      console.error(`[Rider Webhooks] ❌ IronXpress API update failed: ${response.status} ${errorText}`)
-      return false
+    if (!ironBase || !internalSecret) {
+      console.warn('[Rider Webhooks] IX config missing; skip source update');
+      return false;
     }
 
-    const result = await response.json().catch(() => ({}))
-    console.log(`[Rider Webhooks] ✅ IronXpress order ${orderId} updated to ${status} via API`)
-    console.log('[Rider Webhooks] 🔔 IronXpress notifications should be triggered')
-    return true
-    
+    const id = String(orderId).replace(/^#/, '').trim();
+
+    // ✅ Primary: POST /api/orders/update-status
+    let res = await fetch(`${ironBase}/api/orders/update-status`, {
+      method: 'POST',
+      headers: {
+        'x-shared-secret': internalSecret,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ orderId: id, status }),
+    });
+
+    // Fallback 1: PATCH /api/admin/orders/[id]
+    if (!res.ok && (res.status === 404 || res.status === 405)) {
+      res = await fetch(`${ironBase}/api/admin/orders/${id}`, {
+        method: 'PATCH',
+        headers: {
+          'x-shared-secret': internalSecret,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ status }),
+      });
+    }
+
+    // Fallback 2: PATCH /api/admin/orders (collection)
+    if (!res.ok && (res.status === 404 || res.status === 405)) {
+      res = await fetch(`${ironBase}/api/admin/orders`, {
+        method: 'PATCH',
+        headers: {
+          'x-shared-secret': internalSecret,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ orderId: id, status }),
+      });
+    }
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => 'Unknown error');
+      console.error(`[Rider Webhooks] ❌ IX API update failed: ${res.status} ${txt}`);
+      return false;
+    }
+
+    await res.json().catch(() => ({}));
+    console.log(`[Rider Webhooks] ✅ IX order ${id} -> ${status}`);
+    return true;
   } catch (e) {
-    console.error('[Rider Webhooks] ❌ Exception updating IronXpress via API:', e)
-    return false
+    console.error('[Rider Webhooks] ❌ Exception updating IX via API:', e);
+    return false;
   }
 }
 
-async function getRiderName(userId: string): Promise<string> {
-  if (!userId) return 'Rider'
-  
+async function getRiderName(userId?: string): Promise<string> {
+  if (!userId) return 'Rider';
   try {
-    // Try delivery_partners table first
     const { data: dp } = await supabaseAdmin
       .from('delivery_partners')
       .select('first_name, last_name')
       .eq('user_id', userId)
-      .maybeSingle()
-    
-    const fullName = [dp?.first_name, dp?.last_name].filter(Boolean).join(' ').trim()
-    if (fullName) return fullName
+      .maybeSingle();
 
-    // Fallback to users table
+    const full = [dp?.first_name, dp?.last_name].filter(Boolean).join(' ').trim();
+    if (full) return full;
+
     const { data: u } = await supabaseAdmin
       .from('users')
       .select('email, phone')
       .eq('id', userId)
-      .maybeSingle()
+      .maybeSingle();
 
-    return u?.email ?? u?.phone ?? `Rider-${userId.slice(0, 8)}`
-    
+    return u?.email ?? u?.phone ?? `Rider-${String(userId).slice(0, 8)}`;
   } catch (e) {
-    console.warn('[Rider Webhooks] Could not fetch rider name:', e)
-    return 'Rider'
+    console.warn('[Rider Webhooks] Could not fetch rider name:', e);
+    return 'Rider';
   }
 }

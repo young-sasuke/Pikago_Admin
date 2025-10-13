@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { upsertAssignedOrderWithSync, syncPickedUpStatus } from '@/lib/db-sync'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { mirrorIXStatus } from '@/lib/ironxpress-mirror' // ✅ added
 
 export const runtime = 'nodejs'
 
@@ -83,6 +84,15 @@ export async function POST(req: NextRequest) {
     // 4) Safety: if picked_up, ensure IX mirror fired
     if (status === 'picked_up') {
       await syncPickedUpStatus(orderId)
+    }
+
+    // ✅ 5) Mirror shipped → IronXpress (idempotent)
+    try {
+      if (status === 'shipped') {
+        await mirrorIXStatus(orderId, 'shipped', 'admin_update')
+      }
+    } catch (e) {
+      console.warn('[Update Order Status] IX mirror failed (shipped):', e)
     }
 
     console.log(`[Update Order Status] ✅ ${orderId} → ${status}`)

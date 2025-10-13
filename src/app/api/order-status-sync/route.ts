@@ -1,17 +1,37 @@
-import { mirrorIXStatus } from '@/lib/ironxpress-mirror'
+import { NextResponse } from 'next/server';
+import { mirrorIXStatus } from '@/lib/ironxpress-mirror';
+
+export const runtime = 'nodejs';
 
 export async function POST(req: Request) {
-  const { orderId, status } = await req.json()
-  
-  // Map Pikago status to IronXpress status
-  const ixStatus = status === 'shipped' ? 'shipped' : status
-  
-  // Call the mirror function to sync with IronXpress
-  const success = await mirrorIXStatus(orderId, ixStatus)
+  try {
+    const { orderId, status } = await req.json();
 
-  if (!success) {
-    return new Response(JSON.stringify({ error: 'Failed to sync with IronXpress' }), { status: 500 })
+    if (!orderId || !status) {
+      return NextResponse.json(
+        { error: 'orderId and status are required' },
+        { status: 400 }
+      );
+    }
+
+    // Map Pikago status to IronXpress status
+    const ixStatus = status === 'shipped' ? 'shipped' : status;
+
+    // Sync with IronXpress (idempotent)
+    const success = await mirrorIXStatus(orderId, ixStatus, 'generic_sync');
+
+    if (!success) {
+      return NextResponse.json(
+        { error: 'Failed to sync with IronXpress' },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: e?.message ?? 'unknown_error' },
+      { status: 500 }
+    );
   }
-
-  return new Response(JSON.stringify({ success: true }), { status: 200 })
 }
