@@ -26,11 +26,18 @@ import {
   Phone,
   Truck,
   CheckCircle,
-  Store,
 } from 'lucide-react'
 import AssignRiderModal from '@/components/AssignRiderModal'
 import AssignmentDetailsModal from '@/components/AssignmentDetailsModal'
 import { useRealtime } from '@/hooks/useRealtime'
+
+/* ------------------------ helpers ------------------------ */
+function parseJSON<T = any>(v: unknown, fallback: T): T {
+  if (!v) return fallback
+  if (typeof v === 'object') return v as T
+  if (typeof v === 'string') { try { return JSON.parse(v) as T } catch { return fallback } }
+  return fallback
+}
 
 /** "Accepted" tab shows accepted + confirmed */
 const ACCEPTED_ALIASES = ['accepted', 'confirmed'] as const
@@ -94,10 +101,41 @@ interface Assignment {
   email?: string
 }
 
-/* Small local helper: render in IST without touching global utils */
+/* ----------------- tiny utils for safe mapping ----------------- */
+const isObj = (x: any) => x && typeof x === 'object'
+
+// `a?.b?.c` by string path; returns undefined if missing
+function path(obj: any, dotted: string) {
+  try { return dotted.split('.').reduce((acc, k) => (acc == null ? acc : acc[k]), obj) }
+  catch { return undefined }
+}
+
+// first non-empty string/number
+function coalesce(...vals: any[]) {
+  for (const v of vals) {
+    if (v === null || v === undefined) continue
+    if (typeof v === 'string' && v.trim() === '') continue
+    return typeof v === 'string' ? v.trim() : v
+  }
+  return null
+}
+
+/* Small local helper: render **correct IST** for many input shapes */
 function dtIST(input: string | number | Date) {
   try {
-    return new Date(input).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+    let d: Date
+    if (typeof input === 'number') {
+      const s = String(input)
+      d = s.length === 10 ? new Date(input * 1000) : new Date(input)
+    } else if (typeof input === 'string') {
+      const s = input.trim()
+      if (/^\d{10}$/.test(s)) d = new Date(parseInt(s) * 1000)
+      else if (s.includes('Z') || /[+-]\d{2}:\d{2}$/.test(s)) d = new Date(s)
+      else d = new Date(s.replace(' ', 'T') + 'Z') // treat tz-less as UTC
+    } else {
+      d = new Date(input)
+    }
+    return d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
   } catch {
     return formatDateTime(String(input))
   }
@@ -175,74 +213,143 @@ function useOrdersDirect() {
         return
       }
 
-      const mapped = (data ?? []).map(
-        (o: any): PikagoOrder => {
-          // metadata fallbacks (IX payloads)
-          const meta = o?.metadata || {}
-          const cust = meta.customer || meta.customer_details || {}
-          const metaName =
-            cust.full_name || cust.name || meta.customer_name || meta.name || null
-          const metaPhone =
-            cust.phone ||
-            cust.phone_number ||
-            meta.customer_phone ||
-            meta.phone ||
-            null
+      const mapped = (data ?? []).map((o: any): PikagoOrder => {
+        const meta = o?.metadata || {}
+        const addrDetails = parseJSON(o?.address_details, {} as any) // <— handles string/jsonb
 
-          // delivery address may be string/obj
-          const metaAddrObj =
-            meta.delivery_address ||
-            meta.address ||
-            (typeof o.address === 'object' ? o.address : null)
+        // ---- Name / Email / Phone: include address_details fallbacks
+        const name = coalesce(
+          o.full_name,
+          o.customer_name,
+          path(meta, 'customer.full_name'),
+          path(meta, 'customer.name'),
+          path(meta, 'customerDetails.full_name'),
+          path(meta, 'customerDetails.name'),
+          path(meta, 'customer_details.full_name'),
+          path(meta, 'customer_details.name'),
+          path(meta, 'customerInfo.full_name'),
+          path(meta, 'customerInfo.name'),
+          path(meta, 'customer_info.full_name'),
+          path(meta, 'customer_info.name'),
+          path(meta, 'contact.name'),
+          path(meta, 'delivery_address.name'),
+          path(meta, 'address.name'),
+          path(meta, 'user.name'),
+          // address_details (jsonb) from DB
+          addrDetails.recipient_name,
+          addrDetails.full_name,
+          addrDetails.name,
+          addrDetails.contact_name
+        )
 
-          const metaAddrStr = metaAddrObj
-            ? [
-                metaAddrObj.address_line_1 || metaAddrObj.line1,
-                metaAddrObj.address_line_2 || metaAddrObj.line2,
-                metaAddrObj.city,
-                metaAddrObj.state,
-                metaAddrObj.pincode || metaAddrObj.zip,
-              ]
-              .filter(Boolean)
-              .join(', ')
-            : null
+        const email = coalesce(
+          o.email,
+          path(meta, 'customer.email'),
+          path(meta, 'customerDetails.email'),
+          path(meta, 'customer_details.email'),
+          path(meta, 'customerInfo.email'),
+          path(meta, 'customer_info.email'),
+          path(meta, 'contact.email'),
+          path(meta, 'user.email'),
+          meta.email,
+          meta.customer_email,
+          path(meta, 'address.email'),
+          addrDetails.email
+        )
 
-          return {
-            id: String(o.id),
-            source_order_id: String(o.id),
-            full_name: o.full_name ?? o.customer_name ?? metaName ?? null,
-            email: o.email ?? cust.email ?? meta.email ?? null,
-            phone: o.phone ?? o.customer_phone ?? metaPhone ?? null,
-            items: Array.isArray(o.items) ? o.items : [],
-            total_amount: Number(o.total_amount ?? 0),
-            payment_status: o.payment_status ?? 'pending',
-            order_status: o.order_status ?? 'accepted',
-            pickup_date: o.pickup_date ?? null,
-            delivery_date: o.delivery_date ?? null,
-            delivery_type: o.delivery_type ?? null,
-            delivery_address:
-              (typeof o.delivery_address === 'string' ? o.delivery_address : null) ??
-              (typeof o.address === 'string' ? o.address : null) ??
-              metaAddrStr ??
-              null,
-            created_at: o.created_at ?? new Date().toISOString(),
-            updated_at: o.updated_at ?? o.created_at ?? new Date().toISOString(),
-            store_address_id:
-              o.store_address_id ?? 
-              o.pickup_store_address_id ?? 
-              (meta as any).store_address_id ?? 
-              (meta as any).pickup_store_address_id ?? 
-              null,
-            store_address:
-              o.store_address ?? 
-              o.pickup_store_address ?? 
-              (meta as any).store_address ?? 
-              (meta as any).pickup_store_address ?? 
-              null,
-            metadata: o.metadata ?? null,
-          }
+        const phone = coalesce(
+          o.phone,
+          o.customer_phone,
+          path(meta, 'customer.phone'),
+          path(meta, 'customer.phone_number'),
+          path(meta, 'customer.mobile'),
+          path(meta, 'customerDetails.phone'),
+          path(meta, 'customerDetails.phone_number'),
+          path(meta, 'customer_details.phone'),
+          path(meta, 'customer_details.phone_number'),
+          path(meta, 'customerInfo.phone'),
+          path(meta, 'customerInfo.mobile'),
+          path(meta, 'customer_info.phone'),
+          path(meta, 'customer_info.mobile'),
+          path(meta, 'contact.phone'),
+          path(meta, 'contact.phone_number'),
+          path(meta, 'contact.mobile'),
+          meta.customer_phone,
+          meta.phone,
+          path(meta, 'address.phone'),
+          path(meta, 'delivery_address.phone'),
+          path(meta, 'delivery_address.mobile'),
+          // address_details
+          addrDetails.phone_number,
+          addrDetails.mobile,
+          addrDetails.phone
+        )
+
+        // ---- Address: prefer row string, else build from address_details/object
+        const addrString = coalesce(
+          typeof o.delivery_address === 'string' && o.delivery_address,
+          typeof o.address === 'string' && o.address,
+          meta.address_text,
+          meta.delivery_address_text,
+          meta.shipping_address_text,
+          addrDetails.address_text
+        )
+
+        const addrObj =
+          (typeof o.delivery_address === 'object' && o.delivery_address) ||
+          (typeof o.address === 'object' && o.address) ||
+          (isObj(addrDetails) && addrDetails) ||
+          (isObj(meta.delivery_address) && meta.delivery_address) ||
+          (isObj(meta.address) && meta.address) ||
+          (isObj(meta.shipping_address) && meta.shipping_address) ||
+          null
+
+        const addrFromObj =
+          addrObj &&
+          [
+            addrObj.address_line_1 || addrObj.line1 || addrObj.address1,
+            addrObj.address_line_2 || addrObj.line2 || addrObj.address2,
+            addrObj.landmark,
+            addrObj.city,
+            addrObj.state,
+            addrObj.pincode || addrObj.zip || addrObj.postcode,
+          ]
+            .filter(Boolean)
+            .join(', ')
+
+        const delivery_address = coalesce(addrString, addrFromObj)
+
+        return {
+          id: String(o.id),
+          source_order_id: String(o.id),
+          full_name: name,
+          email: email,
+          phone: phone,
+          items: Array.isArray(o.items) ? o.items : [],
+          total_amount: Number(o.total_amount ?? 0),
+          payment_status: o.payment_status ?? 'pending',
+          order_status: o.order_status ?? 'accepted',
+          pickup_date: o.pickup_date ?? null,
+          delivery_date: o.delivery_date ?? null,
+          delivery_type: o.delivery_type ?? null,
+          delivery_address: delivery_address,
+          created_at: o.created_at ?? new Date().toISOString(),
+          updated_at: o.updated_at ?? o.created_at ?? new Date().toISOString(),
+          store_address_id:
+            o.store_address_id ??
+            o.pickup_store_address_id ??
+            (meta as any).store_address_id ??
+            (meta as any).pickup_store_address_id ??
+            null,
+          store_address:
+            o.store_address ??
+            o.pickup_store_address ??
+            (meta as any).store_address ??
+            (meta as any).pickup_store_address ??
+            null,
+          metadata: o.metadata ?? null,
         }
-      )
+      })
 
       setOrders(mapped)
     } catch (err) {
@@ -264,9 +371,7 @@ function useUsers() {
   const [rows, setRows] = useState<UserRow[]>([])
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    void fetchUsers()
-  }, [])
+  useEffect(() => { void fetchUsers() }, [])
 
   async function fetchUsers() {
     try {
@@ -305,15 +410,11 @@ function OrderDetailsModal({
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            {/* FULL ID visible */}
             <h3 className="text-lg font-semibold text-gray-900">#{order.id}</h3>
-            <p className="text-sm text-gray-500">
-              {/* created_at shown in IST for consistency */}
-              Created {dtIST(order.created_at)}
-            </p>
+            <p className="text-sm text-gray-500">Created {dtIST(order.created_at)}</p>
           </div>
           <span
-            className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(
+            className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ring-1 ring-inset ${getStatusColor(
               order.order_status
             )}`}
           >
@@ -322,41 +423,43 @@ function OrderDetailsModal({
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="bg-gray-50 rounded-lg p-4">
+          <div className="bg-white border border-gray-200 rounded-lg p-4">
             <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
               <Phone className="h-4 w-4" />
               Customer Details
             </h4>
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
-                <span className="text-gray-600">Name:</span>
-                <span className="font-medium">{order.full_name || 'N/A'}</span>
+                <span className="text-gray-700">Name:</span>
+                <span className="font-medium text-gray-900">{order.full_name || 'N/A'}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-600">Email:</span>
-                <span className="font-medium">{order.email || 'N/A'}</span>
+                <span className="text-gray-700">Email:</span>
+                <span className="font-medium text-gray-900">{order.email || 'N/A'}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-600">Phone:</span>
-                <span className="font-medium">{order.phone || 'N/A'}</span>
+                <span className="text-gray-700">Phone:</span>
+                <span className="font-medium text-gray-900">{order.phone || 'N/A'}</span>
               </div>
             </div>
           </div>
 
-          <div className="bg-gray-50 rounded-lg p-4">
+          <div className="bg-white border border-gray-200 rounded-lg p-4">
             <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
               <IndianRupee className="h-4 w-4" />
               Financial Details
             </h4>
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
-                <span className="text-gray-600">Total Amount:</span>
-                <span className="font-medium">{formatCurrency(order.total_amount)}</span>
+                <span className="text-gray-700">Total Amount:</span>
+                <span className="font-medium text-gray-900">
+                  {formatCurrency(order.total_amount)}
+                </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-600">Payment Status:</span>
+                <span className="text-gray-700">Payment Status:</span>
                 <span
-                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(
+                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ring-1 ring-inset ${getStatusColor(
                     order.payment_status
                   )}`}
                 >
@@ -367,25 +470,25 @@ function OrderDetailsModal({
           </div>
         </div>
 
-        <div className="bg-gray-50 rounded-lg p-4">
+        <div className="bg-white border border-gray-200 rounded-lg p-4">
           <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
             <MapPin className="h-4 w-4" />
             Delivery Details
           </h4>
           <div className="space-y-2 text-sm">
             <div>
-              <span className="text-gray-600">Address:</span>
+              <span className="text-gray-700">Address:</span>
               <p className="mt-1 text-gray-900">{order.delivery_address || 'N/A'}</p>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <span className="text-gray-600">Pickup Date:</span>
+                <span className="text-gray-700">Pickup Date:</span>
                 <p className="font-medium">
                   {order.pickup_date ? formatDate(order.pickup_date) : 'N/A'}
                 </p>
               </div>
               <div>
-                <span className="text-gray-600">Delivery Date:</span>
+                <span className="text-gray-700">Delivery Date:</span>
                 <p className="font-medium">
                   {order.delivery_date ? formatDate(order.delivery_date) : 'N/A'}
                 </p>
@@ -393,8 +496,8 @@ function OrderDetailsModal({
             </div>
             {order.delivery_type && (
               <div>
-                <span className="text-gray-600">Delivery Type:</span>
-                <span className="ml-2 font-medium capitalize">
+                <span className="text-gray-700">Delivery Type:</span>
+                <span className="ml-2 font-medium capitalize text-gray-900">
                   {order.delivery_type.replace('_', ' ')}
                 </span>
               </div>
@@ -403,12 +506,12 @@ function OrderDetailsModal({
         </div>
 
         {order.items && order.items.length > 0 && (
-          <div className="bg-gray-50 rounded-lg p-4">
+          <div className="bg-white border border-gray-200 rounded-lg p-4">
             <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
               <Package className="h-4 w-4" />
               Order Items ({order.items.length})
             </h4>
-            <div className="space-y-2 max-h-40 overflow-y-auto">
+            <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
               {order.items.map((item: OrderItem, index: number) => (
                 <div key={index} className="flex justify-between items-center text-sm">
                   <span className="text-gray-900">
@@ -423,14 +526,11 @@ function OrderDetailsModal({
           </div>
         )}
 
-        <div className="bg-blue-50 rounded-lg p-4">
+        <div className="bg-blue-50 rounded-lg p-4 border border-blue-100">
           <h4 className="font-medium text-gray-900 mb-2">Source Information</h4>
           <div className="text-sm">
-            <span className="text-gray-600">IronXpress Order ID:</span>
-            {/* FULL source id visible */}
-            <span className="ml-2 font-mono text-blue-600 break-all">
-              {order.source_order_id}
-            </span>
+            <span className="text-gray-700">IronXpress Order ID:</span>
+            <span className="ml-2 font-mono text-blue-700 break-all">{order.source_order_id}</span>
           </div>
         </div>
       </div>
@@ -722,11 +822,8 @@ export default function OrdersPage() {
                     <tr key={order.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center gap-2">
-                          <div className="text-lg">
-                            {getStatusIcon(order.order_status)}
-                          </div>
+                          <div className="text-lg">{getStatusIcon(order.order_status)}</div>
                           <div className="min-w-[220px]">
-                            {/* FULL IDs visible, with wrapping */}
                             <p className="text-sm font-medium text-gray-900 break-all">
                               #{order.id}
                             </p>
@@ -811,8 +908,7 @@ export default function OrdersPage() {
                               Assign Pickup
                             </Button>
                           )}
-                          
-                          {/* Re-assignment for assigned orders */}
+
                           {order.order_status === 'assigned' && (
                             <Button
                               variant="outline"
@@ -824,7 +920,7 @@ export default function OrdersPage() {
                               Re-assign Pickup
                             </Button>
                           )}
-                          
+
                           {DISPATCH_READY_ALIASES.includes(order.order_status as any) && (
                             <Button
                               variant="default"
@@ -836,8 +932,7 @@ export default function OrdersPage() {
                               Assign Delivery
                             </Button>
                           )}
-                          
-                          {/* Re-assignment for delivery orders */}
+
                           {order.order_status === 'out_for_delivery' && (
                             <Button
                               variant="outline"
@@ -850,7 +945,6 @@ export default function OrdersPage() {
                             </Button>
                           )}
 
-                          {/* Status progression (pickup leg) */}
                           {order.order_status === 'assigned' && (
                             <Button
                               variant="default"
@@ -884,7 +978,6 @@ export default function OrdersPage() {
                             </Button>
                           )}
 
-                          {/* Delivery leg completion */}
                           {order.order_status === 'out_for_delivery' && (
                             <Button
                               variant="default"

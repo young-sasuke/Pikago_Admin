@@ -54,7 +54,9 @@ export function Modal({
               leaveFrom="opacity-100 scale-100"
               leaveTo="opacity-0 scale-95"
             >
-              <Dialog.Panel className={`w-full ${sizeClasses[size]} transform overflow-hidden rounded-2xl bg-white p-6 text-left align-middle shadow-xl transition-all`}>
+              <Dialog.Panel
+                className={`w-full ${sizeClasses[size]} transform overflow-hidden rounded-2xl bg-white p-6 text-left align-middle shadow-xl transition-all max-h-[85vh]`}
+              >
                 <div className="flex items-center justify-between mb-4">
                   <Dialog.Title
                     as="h3"
@@ -73,7 +75,10 @@ export function Modal({
                     </Button>
                   )}
                 </div>
-                {children}
+                {/* Scroll container for long content */}
+                <div className="overflow-y-auto pr-1" style={{ maxHeight: 'calc(85vh - 56px)' }}>
+                  {children}
+                </div>
               </Dialog.Panel>
             </Transition.Child>
           </div>
