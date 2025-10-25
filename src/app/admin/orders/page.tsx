@@ -13,6 +13,7 @@ import {
   getStatusIcon,
   formatDateTime,
   formatDate,
+  formatTime, // ← added
 } from '@/lib/utils'
 import { supabase } from '@/lib/supabase'
 import { toast } from 'react-toastify'
@@ -77,6 +78,15 @@ interface PikagoOrder {
   delivery_date: string | null
   delivery_type: string | null
   delivery_address: string | null
+
+  /* ← added fields for modern dashboards time windows */
+  pickup_slot_display_time?: string | null
+  pickup_slot_start_time?: string | null
+  pickup_slot_end_time?: string | null
+  delivery_slot_display_time?: string | null
+  delivery_slot_start_time?: string | null
+  delivery_slot_end_time?: string | null
+
   created_at: string
   updated_at: string
   store_address_id?: string | null
@@ -333,6 +343,15 @@ function useOrdersDirect() {
           delivery_date: o.delivery_date ?? null,
           delivery_type: o.delivery_type ?? null,
           delivery_address: delivery_address,
+
+          // ← added passthrough slot fields (no behavior change)
+          pickup_slot_display_time: o.pickup_slot_display_time ?? null,
+          pickup_slot_start_time: o.pickup_slot_start_time ?? null,
+          pickup_slot_end_time: o.pickup_slot_end_time ?? null,
+          delivery_slot_display_time: o.delivery_slot_display_time ?? null,
+          delivery_slot_start_time: o.delivery_slot_start_time ?? null,
+          delivery_slot_end_time: o.delivery_slot_end_time ?? null,
+
           created_at: o.created_at ?? new Date().toISOString(),
           updated_at: o.updated_at ?? o.created_at ?? new Date().toISOString(),
           store_address_id:
@@ -849,22 +868,49 @@ export default function OrdersPage() {
                           {order.payment_status}
                         </div>
                       </td>
+
+                      {/* ← UPDATED Schedule cell: dates + display window or start–end */}
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-900">
                           {order.pickup_date && (
-                            <div className="flex items-center gap-1 mb-1">
-                              <Package className="h-3 w-3" />
-                              <span>{formatDate(order.pickup_date)}</span>
+                            <div className="flex items-start gap-2 mb-1">
+                              <Package className="h-3 w-3 mt-0.5" />
+                              <div>
+                                <span className="font-medium">{formatDate(order.pickup_date)}</span>
+                                {order.pickup_slot_display_time && (
+                                  <p className="text-xs text-gray-500">{order.pickup_slot_display_time}</p>
+                                )}
+                                {!order.pickup_slot_display_time &&
+                                  order.pickup_slot_start_time &&
+                                  order.pickup_slot_end_time && (
+                                  <p className="text-xs text-gray-500">
+                                    {formatTime(order.pickup_slot_start_time)} - {formatTime(order.pickup_slot_end_time)}
+                                  </p>
+                                )}
+                              </div>
                             </div>
                           )}
                           {order.delivery_date && (
-                            <div className="flex items-center gap-1">
-                              <Truck className="h-3 w-3" />
-                              <span>{formatDate(order.delivery_date)}</span>
+                            <div className="flex items-start gap-2">
+                              <Truck className="h-3 w-3 mt-0.5" />
+                              <div>
+                                <span className="font-medium">{formatDate(order.delivery_date)}</span>
+                                {order.delivery_slot_display_time && (
+                                  <p className="text-xs text-gray-500">{order.delivery_slot_display_time}</p>
+                                )}
+                                {!order.delivery_slot_display_time &&
+                                  order.delivery_slot_start_time &&
+                                  order.delivery_slot_end_time && (
+                                  <p className="text-xs text-gray-500">
+                                    {formatTime(order.delivery_slot_start_time)} - {formatTime(order.delivery_slot_end_time)}
+                                  </p>
+                                )}
+                              </div>
                             </div>
                           )}
                         </div>
                       </td>
+
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span
                           className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(
